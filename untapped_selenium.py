@@ -175,6 +175,33 @@ def login(
         raise
 
 
+def start_manual_login(
+    browser: str = "firefox",
+    headless: bool = False,
+) -> webdriver.Remote:
+    """
+    Start a browser session for manual Untappd login.
+    Caller is responsible for completing login interactively.
+    """
+    if headless:
+        raise ValueError("Manual login requires a visible browser window. Run without headless mode.")
+
+    print(f"Starting {browser.capitalize()} browser for manual login...")
+    driver = create_driver(headless=headless, browser=browser)
+    driver.get(f"{UNTAPPD_BASE}/user/login")
+    print("Opened Untappd login page. Complete login manually in the browser window.")
+    return driver
+
+
+def wait_for_manual_login(driver: webdriver.Remote, timeout: int = 300):
+    """
+    Wait until manual login is completed by checking that we're no longer on /login.
+    """
+    print(f"Waiting up to {timeout} seconds for manual login to complete...")
+    WebDriverWait(driver, timeout).until(lambda d: "/login" not in d.current_url.lower())
+    print("✓ Manual login detected.")
+
+
 def fetch_checkins(driver: webdriver.Remote, username: str) -> pd.DataFrame:
     """
     Scrape check-ins from user's profile using Selenium.
