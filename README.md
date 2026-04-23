@@ -51,6 +51,24 @@ A comprehensive dashboard for visualizing your Untappd check-in data with intera
    python run.py scrape-fetch --output-dir ./charts
    ```
 
+### Option 1b: Selenium Browser Automation (Firefox or Chrome)
+
+Use Selenium when standard scraping is blocked and you want a real browser session.
+
+```bash
+# Login with Firefox (headless by default)
+python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser firefox
+
+# Or use Chrome
+python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser chrome
+
+# Download your check-ins
+python run.py selenium-fetch --browser firefox --output my_checkins.csv
+
+# Run with a visible browser window
+python run.py selenium-fetch --browser chrome --headed --output-dir ./charts
+```
+
 4. View the results in Streamlit:
    ```bash
    python run.py streamlit
@@ -110,6 +128,16 @@ python3 run.py scrape-fetch --output my_checkins.csv
 
 # Specify a timeframe (default: Month)
 python3 run.py scrape-fetch --timeframe Year --output-dir ./charts
+```
+
+#### Selenium (Firefox or Chrome)
+
+```bash
+# Login via Selenium
+python3 run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser firefox
+
+# Fetch with Selenium
+python3 run.py selenium-fetch --browser chrome --output my_checkins.csv
 ```
 
 #### Untappd API (If you have commercial access)

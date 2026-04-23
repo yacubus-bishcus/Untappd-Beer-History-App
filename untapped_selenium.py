@@ -9,13 +9,16 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service as ChromeService
+from selenium.webdriver.firefox.service import Service as FirefoxService
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
+from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
-from selenium.webdriver.firefox.service import Service
 
 UNTAPPD_BASE = "https://untappd.com"
 CREDENTIALS_FILE = ".untappd_credentials_selenium"
+BROWSER_CHOICES = {"firefox", "chrome"}
 
 
 def get_credentials_path():
@@ -49,41 +52,60 @@ def load_credentials() -> dict:
         return json.load(f)
 
 
-def create_driver(headless: bool = True):
-    """Create and configure Firefox WebDriver."""
-    options = webdriver.FirefoxOptions()
+def create_driver(headless: bool = True, browser: str = "firefox") -> webdriver.Remote:
+    """Create and configure a Selenium WebDriver (Firefox or Chrome)."""
+    browser = browser.lower()
+    if browser not in BROWSER_CHOICES:
+        supported = ", ".join(sorted(BROWSER_CHOICES))
+        raise ValueError(f"Unsupported browser '{browser}'. Supported: {supported}.")
+
+    if browser == "chrome":
+        options = webdriver.ChromeOptions()
+    else:
+        options = webdriver.FirefoxOptions()
+
     if headless:
         options.add_argument("--headless")
-    
+
     # Avoid being detected as a bot
-    options.set_preference("dom.webdriver.enabled", False)
-    options.set_preference("useAutomationExtension", False)
+    if browser == "firefox":
+        options.set_preference("dom.webdriver.enabled", False)
+        options.set_preference("useAutomationExtension", False)
     options.add_argument("--disable-blink-features=AutomationControlled")
-    
+
     # Set a realistic user agent
     options.add_argument(
         "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
     )
-    
-    # Install geckodriver if needed
+
     try:
-        service = Service(GeckoDriverManager().install())
-        driver = webdriver.Firefox(service=service, options=options)
+        if browser == "chrome":
+            service = ChromeService(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=options)
+        else:
+            service = FirefoxService(GeckoDriverManager().install())
+            driver = webdriver.Firefox(service=service, options=options)
     except Exception as e:
-        print(f"Error setting up Firefox WebDriver: {e}")
+        browser_name = browser.capitalize()
+        print(f"Error setting up {browser_name} WebDriver: {e}")
         raise
-    
+
     return driver
 
 
-def login(username: str, password: str, headless: bool = True) -> webdriver.Firefox:
+def login(
+    username: str,
+    password: str,
+    headless: bool = True,
+    browser: str = "firefox",
+) -> webdriver.Remote:
     """
     Log into Untappd using Selenium.
     Returns the authenticated WebDriver.
     """
-    print("Starting Firefox browser...")
-    driver = create_driver(headless=headless)
-    
+    print(f"Starting {browser.capitalize()} browser...")
+    driver = create_driver(headless=headless, browser=browser)
+
     try:
         # Navigate to login page
         print("Navigating to Untappd login page...")
@@ -145,7 +167,7 @@ def login(username: str, password: str, headless: bool = True) -> webdriver.Fire
         raise
 
 
-def fetch_checkins(driver: webdriver.Firefox, username: str) -> pd.DataFrame:
+def fetch_checkins(driver: webdriver.Remote, username: str) -> pd.DataFrame:
     """
     Scrape check-ins from user's profile using Selenium.
     """
@@ -293,7 +315,7 @@ def parse_checkin_item(item) -> Optional[dict]:
         return None
 
 
-def get_user_info(driver: webdriver.Firefox, username: str) -> dict:
+def get_user_info(driver: webdriver.Remote, username: str) -> dict:
     """Get user profile info."""
     try:
         print(f"Fetching user info for {username}...")
@@ -322,7 +344,7 @@ def get_user_info(driver: webdriver.Firefox, username: str) -> dict:
         return {"username": username, "total_checkins": None}
 
 
-def quit_driver(driver: webdriver.Firefox):
+def quit_driver(driver: webdriver.Remote):
     """Safely close the browser."""
     try:
         driver.quit()

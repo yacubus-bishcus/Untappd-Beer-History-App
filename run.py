@@ -159,6 +159,10 @@ Examples:
   # Fetch data using scraper
   python run.py scrape-fetch --timeframe Month --output checkins.csv
 
+  # Login using Selenium with Firefox or Chrome
+  python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser firefox
+  python run.py selenium-fetch --browser chrome --output checkins.csv
+
   # Login to Untappd API (if you have a commercial account)
   python run.py login --client-id YOUR_ID --client-secret YOUR_SECRET
 
@@ -203,6 +207,49 @@ Examples:
     )
     scraper_fetch_parser.add_argument("--output-dir", help="Directory to save HTML charts")
     scraper_fetch_parser.add_argument("--no-open", action="store_true", help="Do not open charts in browser")
+
+    # Selenium login command
+    selenium_login_parser = subparsers.add_parser(
+        "selenium-login",
+        help="Login using Selenium browser automation",
+    )
+    selenium_login_parser.add_argument("--username", required=True, help="Your Untappd username")
+    selenium_login_parser.add_argument("--password", required=True, help="Your Untappd password")
+    selenium_login_parser.add_argument(
+        "--browser",
+        default="firefox",
+        choices=["firefox", "chrome"],
+        help="Browser engine for Selenium",
+    )
+    selenium_login_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Run with visible browser window (headless by default)",
+    )
+
+    # Selenium fetch command
+    selenium_fetch_parser = subparsers.add_parser(
+        "selenium-fetch",
+        help="Fetch check-ins using Selenium browser automation",
+    )
+    selenium_fetch_parser.add_argument("--username", help="Untappd username to fetch (defaults to authenticated user)")
+    selenium_fetch_parser.add_argument("--output", "-o", help="Save fetched data to CSV file")
+    selenium_fetch_parser.add_argument(
+        "--timeframe", "-t", default="Month", choices=TIMEFRAME_CHOICES, help="Render charts for this timeframe"
+    )
+    selenium_fetch_parser.add_argument("--output-dir", help="Directory to save HTML charts")
+    selenium_fetch_parser.add_argument("--no-open", action="store_true", help="Do not open charts in browser")
+    selenium_fetch_parser.add_argument(
+        "--browser",
+        default="firefox",
+        choices=["firefox", "chrome"],
+        help="Browser engine for Selenium",
+    )
+    selenium_fetch_parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Run with visible browser window (headless by default)",
+    )
 
     # Original API login command
     login_parser = subparsers.add_parser("login", help="Authenticate with Untappd API (requires commercial account)")
@@ -454,6 +501,117 @@ def handle_fetch(args):
                 open_html_files(saved_paths)
 
 
+def handle_selenium_login(args):
+    """Handle login using Selenium automation."""
+    print(f"Authenticating with Untappd using Selenium ({args.browser})...")
+    driver = None
+    try:
+        driver = selenium_login(
+            args.username,
+            args.password,
+            headless=not args.headed,
+            browser=args.browser,
+        )
+        selenium_save_credentials(args.username, args.password)
+        user_info = selenium_get_user_info(driver, args.username)
+        print(f"✓ Successfully logged in as {user_info['username']}")
+        if user_info.get("total_checkins"):
+            print(f"  Total check-ins: {user_info['total_checkins']}")
+    except Exception as e:
+        print(f"✗ Selenium login failed: {e}")
+        raise SystemExit(1)
+    finally:
+        if driver is not None:
+            quit_driver(driver)
+
+
+def handle_selenium_fetch(args):
+    """Fetch check-ins using Selenium automation."""
+    creds = selenium_load_credentials()
+    if not creds.get("username") or not creds.get("password"):
+        raise SystemExit(
+            "Not authenticated. Run 'python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD' first."
+        )
+
+    target_user = args.username or creds["username"]
+    driver = None
+    try:
+        print(f"Launching Selenium browser ({args.browser})...")
+        driver = selenium_login(
+            creds["username"],
+            creds["password"],
+            headless=not args.headed,
+            browser=args.browser,
+        )
+        print(f"Fetching check-ins from {target_user}...")
+        df = selenium_fetch_checkins(driver, target_user)
+        print(f"✓ Downloaded {len(df)} check-ins")
+    except Exception as e:
+        print(f"✗ Error fetching check-ins with Selenium: {e}")
+        raise SystemExit(1)
+    finally:
+        if driver is not None:
+            quit_driver(driver)
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+        print(f"Saved data to {output_path}")
+
+    if args.output_dir:
+        print("\nParsing data and rendering charts...")
+        df_parsed = parse_dataframe(
+            df,
+            date_col="checkin_date",
+            state_col="place_state",
+            style_col="beer_style",
+            serving_col="serving_style",
+            rating_col="rating",
+            place_col="venue_name",
+        )
+        if df_parsed.empty:
+            print("No valid check-in records to render.")
+            return
+
+        filtered_df, cutoff, max_date = get_timeframe(df_parsed, args.timeframe)
+        if filtered_df.empty:
+            print("No check-ins in selected timeframe.")
+            return
+
+        metrics = {
+            "checkins": filtered_df.shape[0],
+            "unique_places": filtered_df["place_name"].nunique(),
+            "average_rating": filtered_df["rating"].dropna().mean() if "rating" in filtered_df.columns else None,
+            "states_visited": filtered_df["state_code"].dropna().nunique(),
+        }
+
+        charts = {
+            "state_map": create_state_map(filtered_df),
+            "checkins": create_checkin_chart(filtered_df, args.timeframe),
+            "styles": create_style_chart(filtered_df),
+            "ratings": create_rating_serving_chart(filtered_df),
+        }
+
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths = []
+        for label, chart in charts.items():
+            if chart is not None:
+                html_path = output_dir / f"{label}.html"
+                save_plotly_chart(chart, html_path)
+                saved_paths.append(html_path)
+        write_summary_file(metrics, output_dir, args.timeframe, (cutoff, max_date))
+        print(f"✓ Saved charts to {output_dir}")
+
+        if not args.no_open:
+            for chart in charts.values():
+                if chart is not None:
+                    chart.show()
+            if saved_paths:
+                open_html_files(saved_paths)
+
+
 def handle_render(args):
     """Render charts from CSV/JSON file."""
     cli_main(args)
@@ -466,6 +624,10 @@ def main():
         handle_scraper_login(args)
     elif args.command == "scrape-fetch":
         handle_scraper_fetch(args)
+    elif args.command == "selenium-login":
+        handle_selenium_login(args)
+    elif args.command == "selenium-fetch":
+        handle_selenium_fetch(args)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "fetch":
