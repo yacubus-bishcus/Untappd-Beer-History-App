@@ -1,0 +1,6 @@
+streamlit
+plotly
+streamlit-plotly-events
+pandas
+requests
+beautifulsoup4
