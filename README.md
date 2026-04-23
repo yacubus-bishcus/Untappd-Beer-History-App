@@ -67,6 +67,9 @@ python run.py selenium-fetch --browser firefox --output my_checkins.csv
 
 # Run with a visible browser window
 python run.py selenium-fetch --browser chrome --headed --output-dir ./charts
+
+# Keep login fully manual (good for CAPTCHA/2FA), then automate scraping after login
+python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --output my_checkins.csv
 ```
 
 4. View the results in Streamlit:
@@ -138,6 +141,9 @@ python3 run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD 
 
 # Fetch with Selenium
 python3 run.py selenium-fetch --browser chrome --output my_checkins.csv
+
+# Manual login in browser, automated post-login scraping
+python3 run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --output my_checkins.csv
 ```
 
 #### Untappd API (If you have commercial access)

@@ -33,6 +33,8 @@ from untapped_scraper import (
 )
 from untapped_selenium import (
     login as selenium_login,
+    start_manual_login as selenium_start_manual_login,
+    wait_for_manual_login as selenium_wait_for_manual_login,
     fetch_checkins as selenium_fetch_checkins,
     get_user_info as selenium_get_user_info,
     save_credentials as selenium_save_credentials,
@@ -163,6 +165,7 @@ Examples:
   python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser firefox
   python run.py selenium-login --username YOUR_USERNAME --password YOUR_PASSWORD --browser chrome --debug
   python run.py selenium-fetch --browser chrome --output checkins.csv
+  python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --output checkins.csv
 
   # Login to Untappd API (if you have a commercial account)
   python run.py login --client-id YOUR_ID --client-secret YOUR_SECRET
@@ -233,7 +236,7 @@ Examples:
         help="Debug mode: show the browser window (disables headless mode)",
     )
 
-    # Selenium fetch command
+  # Selenium fetch command
     selenium_fetch_parser = subparsers.add_parser(
         "selenium-fetch",
         help="Fetch check-ins using Selenium browser automation",
@@ -260,6 +263,35 @@ Examples:
         "--debug",
         action="store_true",
         help="Debug mode: show the browser window (disables headless mode)",
+    )
+
+    # Selenium manual-login fetch command
+    selenium_manual_fetch_parser = subparsers.add_parser(
+        "selenium-manual-fetch",
+        help="Manually login in browser, then scrape check-ins with Selenium",
+    )
+    selenium_manual_fetch_parser.add_argument(
+        "--username",
+        required=True,
+        help="Untappd username to fetch",
+    )
+    selenium_manual_fetch_parser.add_argument("--output", "-o", help="Save fetched data to CSV file")
+    selenium_manual_fetch_parser.add_argument(
+        "--timeframe", "-t", default="Month", choices=TIMEFRAME_CHOICES, help="Render charts for this timeframe"
+    )
+    selenium_manual_fetch_parser.add_argument("--output-dir", help="Directory to save HTML charts")
+    selenium_manual_fetch_parser.add_argument("--no-open", action="store_true", help="Do not open charts in browser")
+    selenium_manual_fetch_parser.add_argument(
+        "--browser",
+        default="firefox",
+        choices=["firefox", "chrome"],
+        help="Browser engine for Selenium",
+    )
+    selenium_manual_fetch_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="How long to wait (seconds) for you to finish manual login",
     )
 
     # Original API login command
@@ -625,6 +657,83 @@ def handle_selenium_fetch(args):
                 open_html_files(saved_paths)
 
 
+def handle_selenium_manual_fetch(args):
+    """Manually login in browser, then scrape check-ins using Selenium automation."""
+    driver = None
+    try:
+        print(f"Launching Selenium browser ({args.browser}) for manual login...")
+        driver = selenium_start_manual_login(browser=args.browser, headless=False)
+        selenium_wait_for_manual_login(driver, timeout=args.timeout)
+
+        print(f"Fetching check-ins from {args.username}...")
+        df = selenium_fetch_checkins(driver, args.username)
+        print(f"✓ Downloaded {len(df)} check-ins")
+    except Exception as e:
+        print(f"✗ Error during manual-login fetch: {e}")
+        raise SystemExit(1)
+    finally:
+        if driver is not None:
+            quit_driver(driver)
+
+    if args.output:
+        output_path = Path(args.output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, index=False)
+        print(f"Saved data to {output_path}")
+
+    if args.output_dir:
+        print("\nParsing data and rendering charts...")
+        df_parsed = parse_dataframe(
+            df,
+            date_col="checkin_date",
+            state_col="place_state",
+            style_col="beer_style",
+            serving_col="serving_style",
+            rating_col="rating",
+            place_col="venue_name",
+        )
+        if df_parsed.empty:
+            print("No valid check-in records to render.")
+            return
+
+        filtered_df, cutoff, max_date = get_timeframe(df_parsed, args.timeframe)
+        if filtered_df.empty:
+            print("No check-ins in selected timeframe.")
+            return
+
+        metrics = {
+            "checkins": filtered_df.shape[0],
+            "unique_places": filtered_df["place_name"].nunique(),
+            "average_rating": filtered_df["rating"].dropna().mean() if "rating" in filtered_df.columns else None,
+            "states_visited": filtered_df["state_code"].dropna().nunique(),
+        }
+
+        charts = {
+            "state_map": create_state_map(filtered_df),
+            "checkins": create_checkin_chart(filtered_df, args.timeframe),
+            "styles": create_style_chart(filtered_df),
+            "ratings": create_rating_serving_chart(filtered_df),
+        }
+
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        saved_paths = []
+        for label, chart in charts.items():
+            if chart is not None:
+                html_path = output_dir / f"{label}.html"
+                save_plotly_chart(chart, html_path)
+                saved_paths.append(html_path)
+        write_summary_file(metrics, output_dir, args.timeframe, (cutoff, max_date))
+        print(f"✓ Saved charts to {output_dir}")
+
+        if not args.no_open:
+            for chart in charts.values():
+                if chart is not None:
+                    chart.show()
+            if saved_paths:
+                open_html_files(saved_paths)
+
+
 def handle_render(args):
     """Render charts from CSV/JSON file."""
     cli_main(args)
@@ -641,6 +750,8 @@ def main():
         handle_selenium_login(args)
     elif args.command == "selenium-fetch":
         handle_selenium_fetch(args)
+    elif args.command == "selenium-manual-fetch":
+        handle_selenium_manual_fetch(args)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "fetch":
