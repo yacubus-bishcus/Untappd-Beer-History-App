@@ -24,6 +24,7 @@ Desktop bundle behavior:
 - On Windows, open `Windows/start_desktop_app.bat`
 - On first launch, the app asks for the Untappd username and saves it to `app_config.json`
 - If no `my_beers.csv` exists yet, the launcher automatically starts the first sync
+- Local source launchers now live in `deploy/mac` and `deploy/windows`
 
 Useful commands:
 

@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-cd /d "%~dp0"
+cd /d "%~dp0\..\.."
 
 set "PYTHON_DOWNLOAD_URL=https://www.python.org/downloads/"
 

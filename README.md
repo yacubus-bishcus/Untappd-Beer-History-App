@@ -23,6 +23,12 @@ The packaged desktop experience works like this:
 6. Let the user refresh beer data or open the dashboard without using Terminal or Command Prompt
 
 On macOS, the main launcher is now a native Cocoa window built with `PyObjC`, packaged inside a real `.app` bundle for Finder. The existing `start_desktop_app.command` is still included as a fallback for development or troubleshooting.
+The platform-specific launcher files live in:
+
+```text
+deploy/mac
+deploy/windows
+```
 
 If Python is missing or older than `3.9`, the launchers prompt the user to open the official Python download page. If the macOS Python build does not include the Cocoa bridge, the app falls back to the browser-based Streamlit dashboard instead of crashing. Windows continues to use the existing Python desktop launcher flow.
 
@@ -83,6 +89,11 @@ The recipient can unzip it and then:
 - on macOS, open `Untappd Beer History.app`
 - on Windows, open `Windows/start_desktop_app.bat`
 
+For local fallback launching from source:
+
+- macOS: `deploy/mac/start_desktop_app.command`
+- Windows: `deploy/windows/start_desktop_app.bat`
+
 ## Commands
 
 ```bash
@@ -132,6 +143,9 @@ The beer export is saved with these columns:
 
 ```text
 untapped_data/
+├── deploy/
+│   ├── mac/
+│   └── windows/
 ├── run.py
 ├── streamlit_app.py
 ├── untapped.py

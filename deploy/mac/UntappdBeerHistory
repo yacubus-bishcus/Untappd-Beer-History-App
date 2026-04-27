@@ -1,0 +1,62 @@
+#!/bin/bash
+set -e
+
+BUNDLE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+APP_DIR="$BUNDLE_DIR/Resources/app"
+PYTHON_DOWNLOAD_URL="https://www.python.org/downloads/"
+
+prompt_open_python_download() {
+  local button
+  button="$(osascript <<'APPLESCRIPT'
+button returned of (display dialog "Python 3.9 or newer is required to run Untappd Beer History. Open the official Python download page now?" buttons {"Cancel", "Open Download Page"} default button "Open Download Page")
+APPLESCRIPT
+)" || return 1
+  if [ "$button" = "Open Download Page" ]; then
+    open "$PYTHON_DOWNLOAD_URL"
+  fi
+}
+
+cd "$APP_DIR"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  prompt_open_python_download || true
+  exit 1
+fi
+
+if ! python3 - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 9) else 1)
+PY
+then
+  prompt_open_python_download || true
+  exit 1
+fi
+
+if [ ! -d ".venv" ]; then
+  python3 -m venv .venv
+fi
+
+source .venv/bin/activate
+python -m pip install --upgrade pip >/dev/null
+python -m pip install -r requirements.txt >/dev/null
+
+if python - <<'PY' >/dev/null 2>&1
+import AppKit
+PY
+then
+  exec python desktop_launcher.py
+fi
+
+button="$(osascript <<'APPLESCRIPT'
+button returned of (display dialog "The installed Python build does not include the Cocoa bridge required for the native macOS launcher. Install the official Python release from python.org for the best experience." buttons {"Continue in Browser", "Open Download Page"} default button "Continue in Browser")
+APPLESCRIPT
+)" || exit 1
+
+if [ "$button" = "Open Download Page" ]; then
+  open "$PYTHON_DOWNLOAD_URL"
+  exit 1
+fi
+
+if [ "$button" = "Continue in Browser" ]; then
+  exec python run.py streamlit
+fi

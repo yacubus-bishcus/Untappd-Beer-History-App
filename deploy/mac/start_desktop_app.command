@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$APP_DIR"
 PYTHON_DOWNLOAD_URL="https://www.python.org/downloads/"
 
