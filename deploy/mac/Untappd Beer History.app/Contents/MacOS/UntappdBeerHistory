@@ -2,15 +2,8 @@
 set -e
 
 BUNDLE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PACKAGED_APP_DIR="$BUNDLE_DIR/Resources/app"
-LOCAL_APP_DIR="$(cd "$BUNDLE_DIR/../../.." && pwd)"
+APP_DIR="$(cd "$BUNDLE_DIR/../../.." && pwd)"
 PYTHON_DOWNLOAD_URL="https://www.python.org/downloads/"
-
-if [ -f "$PACKAGED_APP_DIR/src/requirements.txt" ]; then
-  APP_DIR="$PACKAGED_APP_DIR"
-else
-  APP_DIR="$LOCAL_APP_DIR"
-fi
 
 prompt_open_python_download() {
   local button

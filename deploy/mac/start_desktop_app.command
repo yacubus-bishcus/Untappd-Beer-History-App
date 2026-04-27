@@ -39,18 +39,18 @@ fi
 
 source .venv/bin/activate
 python -m pip install --upgrade pip >/dev/null
-python -m pip install -r requirements.txt >/dev/null
+python -m pip install -r src/requirements.txt >/dev/null
 
 if python - <<'PY' >/dev/null 2>&1
 import AppKit
 PY
 then
-  exec python desktop_launcher.py
+  exec python src/desktop_launcher.py
 else
   echo "PyObjC/Cocoa is not available in this Python build."
   echo "Please install the official Python 3.12 release from python.org and rerun the launcher."
   prompt_open_python_download || true
   echo
   echo "Falling back to the browser-based Streamlit app..."
-  exec python run.py streamlit
+  exec python src/run.py streamlit
 fi

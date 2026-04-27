@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from app_config import get_configured_username
+from paths import DEFAULT_OUTPUT_PATH, PROJECT_ROOT
 from untapped_selenium import (
     fetch_beers as selenium_fetch_beers,
     is_debugger_ready,
@@ -19,7 +20,7 @@ from untapped_selenium import (
 
 DEFAULT_USERNAME = get_configured_username("")
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
-DEFAULT_OUTPUT = "my_beers.csv"
+DEFAULT_OUTPUT = str(DEFAULT_OUTPUT_PATH)
 DEFAULT_USER_DATA_DIR = "/tmp/untappd-manual"
 
 
@@ -33,7 +34,11 @@ def ensure_supported_python():
 
 
 def run_streamlit_app():
-    subprocess.run([sys.executable, "-m", "streamlit", "run", "streamlit_app.py"], check=True)
+    subprocess.run(
+        [sys.executable, "-m", "streamlit", "run", str(PROJECT_ROOT / "src" / "streamlit_app.py")],
+        check=True,
+        cwd=str(PROJECT_ROOT),
+    )
 
 
 def count_csv_rows(path: Path) -> int:
@@ -119,24 +124,24 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Default behavior:
-  python run.py
+  python src/run.py
 
 Examples:
-  python run.py selenium-launch-chrome
-  python run.py selenium-fetch-beers
-  python run.py selenium-fetch-beers --backstop-total 250
-  python run.py streamlit
+  python src/run.py selenium-launch-chrome
+  python src/run.py selenium-fetch-beers
+  python src/run.py selenium-fetch-beers --backstop-total 250
+  python src/run.py streamlit
         """,
     )
     parser.add_argument(
         "--update",
         action="store_true",
-        help="Force a fresh Untappd download even if my_beers.csv already exists",
+        help="Force a fresh Untappd download even if data/my_beers.csv already exists",
     )
     parser.add_argument(
         "--backstop-total",
         type=int,
-        help="Optional expected total beer count for the default python run.py workflow",
+        help="Optional expected total beer count for the default python src/run.py workflow",
     )
 
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -216,7 +221,7 @@ Examples:
     run_default_parser.add_argument(
         "--update",
         action="store_true",
-        help="Force a fresh Untappd download even if my_beers.csv already exists",
+        help="Force a fresh Untappd download even if data/my_beers.csv already exists",
     )
 
     subparsers.add_parser("streamlit", help="Launch the beer history Streamlit dashboard")

@@ -5,11 +5,12 @@ import threading
 from pathlib import Path
 
 from app_config import get_configured_username, set_configured_username
+from paths import DEFAULT_OUTPUT_PATH, PROJECT_ROOT
 
 
-APP_DIR = Path(__file__).resolve().parent
-RUN_SCRIPT = APP_DIR / "run.py"
-DEFAULT_OUTPUT = APP_DIR / "my_beers.csv"
+SRC_DIR = Path(__file__).resolve().parent
+RUN_SCRIPT = SRC_DIR / "run.py"
+DEFAULT_OUTPUT = DEFAULT_OUTPUT_PATH
 
 
 class ProcessManager:
@@ -21,6 +22,7 @@ class ProcessManager:
         if self.process and self.process.poll() is None:
             raise RuntimeError("Wait for the current task to finish or stop it first.")
 
+        self.events.put(("busy", True))
         self.events.put(("status", status_text))
         self.events.put(("log", f"\n$ {' '.join(command)}\n"))
 
@@ -28,7 +30,7 @@ class ProcessManager:
             try:
                 self.process = subprocess.Popen(
                     command,
-                    cwd=str(APP_DIR),
+                    cwd=str(PROJECT_ROOT),
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
                     text=True,
@@ -40,9 +42,11 @@ class ProcessManager:
                 return_code = self.process.wait()
                 self.events.put(("log", f"\nProcess finished with exit code {return_code}.\n"))
                 self.events.put(("status", "Ready"))
+                self.events.put(("busy", False))
             except Exception as exc:
                 self.events.put(("log", f"\nLauncher error: {exc}\n"))
                 self.events.put(("status", "Ready"))
+                self.events.put(("busy", False))
             finally:
                 self.process = None
 
@@ -107,6 +111,7 @@ if sys.platform == "darwin":
             NSButton,
             NSMakeRect,
             NSOpenPanel,
+            NSProgressIndicator,
             NSRunningApplication,
             NSSavePanel,
             NSScrollView,
@@ -139,6 +144,7 @@ if PYOBJC_AVAILABLE:
             self.backstop = ""
             self.output = str(DEFAULT_OUTPUT)
             self.status = "Ready"
+            self.busy = False
             self.timer = None
             self.window = None
             return self
@@ -209,11 +215,19 @@ if PYOBJC_AVAILABLE:
             self.status_label = self._make_label(20, 246, 680, 20, self.status, size=12)
             content.addSubview_(self.status_label)
 
-            scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 20, 720, 210))
+            self.progress_indicator = NSProgressIndicator.alloc().initWithFrame_(
+                NSMakeRect(20, 224, 720, 12)
+            )
+            self.progress_indicator.setIndeterminate_(True)
+            self.progress_indicator.setDisplayedWhenStopped_(False)
+            self.progress_indicator.stopAnimation_(None)
+            content.addSubview_(self.progress_indicator)
+
+            scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(20, 20, 720, 198))
             scroll.setHasVerticalScroller_(True)
             scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
 
-            self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 720, 210))
+            self.log_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 720, 198))
             self.log_view.setEditable_(False)
             self.log_view.setString_("Launcher ready.\n")
             scroll.setDocumentView_(self.log_view)
@@ -260,11 +274,20 @@ if PYOBJC_AVAILABLE:
                     self.append_log(payload)
                 elif event_type == "status":
                     self.status_label.setStringValue_(payload)
+                elif event_type == "busy":
+                    self.set_busy(bool(payload))
 
         def append_log(self, text):
             current = self.log_view.string() or ""
             self.log_view.setString_(current + text)
             self.log_view.scrollRangeToVisible_((len(self.log_view.string()), 0))
+
+        def set_busy(self, is_busy: bool):
+            self.busy = is_busy
+            if is_busy:
+                self.progress_indicator.startAnimation_(None)
+            else:
+                self.progress_indicator.stopAnimation_(None)
 
         def collect_common_args(self):
             return build_common_args(
@@ -450,6 +473,9 @@ class TkDesktopLauncher:
 
         self.ttk.Label(container, textvariable=self.status_var, foreground="#6b7280").pack(anchor="w", pady=(0, 8))
 
+        self.progress = self.ttk.Progressbar(container, mode="indeterminate")
+        self.progress.pack(fill="x", pady=(0, 8))
+
         self.log = self.tk.Text(
             container,
             wrap="word",
@@ -489,7 +515,15 @@ class TkDesktopLauncher:
                 self._append_log(payload)
             elif event_type == "status":
                 self.status_var.set(payload)
+            elif event_type == "busy":
+                self._set_busy(bool(payload))
         self.root.after(150, self._drain_events)
+
+    def _set_busy(self, is_busy: bool):
+        if is_busy:
+            self.progress.start(10)
+        else:
+            self.progress.stop()
 
     def _collect_common_args(self):
         return build_common_args(

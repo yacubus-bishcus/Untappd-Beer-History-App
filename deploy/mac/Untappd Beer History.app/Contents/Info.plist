@@ -9,7 +9,7 @@
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
-  <string>com.local.untappdbeerhistory</string>
+  <string>com.local.untappdbeerhistory.githubdownload</string>
   <key>CFBundleName</key>
   <string>Untappd Beer History</string>
   <key>CFBundlePackageType</key>

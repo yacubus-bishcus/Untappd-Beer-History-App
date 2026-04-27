@@ -45,18 +45,18 @@ if not exist ".venv" (
 
 call ".venv\Scripts\activate.bat"
 python -m pip install --upgrade pip >nul
-python -m pip install -r requirements.txt >nul
+python -m pip install -r src\requirements.txt >nul
 
 python -c "import tkinter" >nul 2>nul
 if %errorlevel%==0 (
-  python desktop_launcher.py
+  python src\desktop_launcher.py
 ) else (
   echo Tkinter is not available in this Python build.
   echo Please install the official Python 3.12 release from python.org, which includes Tkinter.
   set /p OPEN_PYTHON=Open the Python download page now? [Y/n] 
   if /I not "%OPEN_PYTHON%"=="n" start "" "%PYTHON_DOWNLOAD_URL%"
   echo Falling back to the browser-based Streamlit app...
-  python run.py streamlit
+  python src\run.py streamlit
 )
 
 endlocal

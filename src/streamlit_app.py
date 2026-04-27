@@ -1,11 +1,10 @@
-from pathlib import Path
-
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+from paths import DEFAULT_OUTPUT_PATH
 from untapped import create_state_map, create_us_state_map, normalize_country, normalize_state
 
-DEFAULT_DATA_PATH = Path("my_beers.csv")
+DEFAULT_DATA_PATH = DEFAULT_OUTPUT_PATH
 REQUIRED_COLUMNS = [
     "Beer Name",
     "Producer",
@@ -87,7 +86,7 @@ st.title("Untappd Beer History")
 st.markdown("Review your exported beer list, ratings, styles, and recent activity.")
 
 st.sidebar.header("Beer Data")
-source_mode = st.sidebar.radio("Source", ["Use my_beers.csv", "Upload CSV"])
+source_mode = st.sidebar.radio("Source", ["Use data/my_beers.csv", "Upload CSV"])
 show_map = st.sidebar.checkbox("Show drink-location map", value=True)
 map_view = st.sidebar.radio("Map View", ["Global", "US States"], index=0) if show_map else None
 
@@ -96,7 +95,7 @@ error_message = None
 map_chart = None
 map_message = None
 
-if source_mode == "Use my_beers.csv":
+if source_mode == "Use data/my_beers.csv":
     if DEFAULT_DATA_PATH.exists():
         try:
             df = load_beer_history(DEFAULT_DATA_PATH)
@@ -104,7 +103,7 @@ if source_mode == "Use my_beers.csv":
         except Exception as exc:
             error_message = str(exc)
     else:
-        st.sidebar.info("Run `python run.py` first to create `my_beers.csv`.")
+        st.sidebar.info("Run `python src/run.py` first to create `data/my_beers.csv`.")
 else:
     uploaded_file = st.sidebar.file_uploader("Upload beer history CSV", type=["csv"])
     if uploaded_file is not None:
@@ -121,13 +120,13 @@ if show_map:
             if map_view == "US States":
                 map_chart = create_us_state_map(df_map)
                 if map_chart is None:
-                    map_message = "The `Location` values in `my_beers.csv` did not contain enough U.S. state information to build the U.S. map."
+                    map_message = "The `Location` values in `data/my_beers.csv` did not contain enough U.S. state information to build the U.S. map."
             else:
                 map_chart = create_state_map(df_map)
                 if map_chart is None:
-                    map_message = "The `Location` values in `my_beers.csv` did not contain enough country information to build the global map."
+                    map_message = "The `Location` values in `data/my_beers.csv` did not contain enough country information to build the global map."
     except Exception as exc:
-        map_message = f"Could not build map from `my_beers.csv`: {exc}"
+        map_message = f"Could not build map from `data/my_beers.csv`: {exc}"
 
 if error_message:
     st.error(error_message)
@@ -228,4 +227,4 @@ if df is not None and not df.empty:
         use_container_width=True,
     )
 else:
-    st.info("Load `my_beers.csv` or upload a beer-history CSV to get started.")
+    st.info("Load `data/my_beers.csv` or upload a beer-history CSV to get started.")

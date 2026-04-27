@@ -1,9 +1,9 @@
 .venv
-my_beers.csv
-producer_location_cache.json
-app_config.json
+data/my_beers.csv
+data/producer_location_cache.json
+data/app_config.json
 __pycache__
 *.pyc
 *.pyo
 *.pyd
-dist
+deploy/dist

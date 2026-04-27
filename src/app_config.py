@@ -1,12 +1,10 @@
 import json
-from pathlib import Path
+from paths import APP_CONFIG_PATH, ensure_data_dir
 
 
-APP_CONFIG_FILE = "app_config.json"
-
-
-def get_app_config_path() -> Path:
-    return Path(__file__).resolve().parent / APP_CONFIG_FILE
+def get_app_config_path():
+    ensure_data_dir()
+    return APP_CONFIG_PATH
 
 
 def load_app_config() -> dict:

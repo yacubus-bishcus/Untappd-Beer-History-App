@@ -22,11 +22,11 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
 from webdriver_manager.firefox import GeckoDriverManager
+from paths import PRODUCER_LOCATION_CACHE_PATH, ensure_data_dir
 
 UNTAPPD_BASE = "https://untappd.com"
 CREDENTIALS_FILE = ".untappd_credentials_selenium"
 BROWSER_CHOICES = {"firefox", "chrome"}
-PRODUCER_LOCATION_CACHE_FILE = "producer_location_cache.json"
 
 
 def get_credentials_path():
@@ -34,7 +34,8 @@ def get_credentials_path():
 
 
 def get_producer_location_cache_path():
-    return Path(__file__).resolve().parent / PRODUCER_LOCATION_CACHE_FILE
+    ensure_data_dir()
+    return PRODUCER_LOCATION_CACHE_PATH
 
 
 def ensure_credentials_dir():
