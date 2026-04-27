@@ -1,6 +1,8 @@
 import json
 import os
+import re
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -115,6 +117,53 @@ def create_chrome_driver_from_debugger(debugger_address: str) -> webdriver.Remot
     return webdriver.Chrome(service=service, options=options)
 
 
+def launch_chrome_with_debugger(
+    debugger_address: str = "127.0.0.1:9222",
+    user_data_dir: str = "/tmp/untappd-manual",
+    start_url: Optional[str] = None,
+):
+    """
+    Launch a standalone Chrome window with remote debugging enabled.
+    This is useful when you want to log in manually with a real profile window
+    and later attach Selenium to that same browser.
+    """
+    host, _, port = debugger_address.partition(":")
+    if not host or not port.isdigit():
+        raise ValueError("Debugger address must look like 127.0.0.1:9222")
+    if host not in {"127.0.0.1", "localhost"}:
+        raise ValueError("For safety, debugger host must be 127.0.0.1 or localhost.")
+
+    start_url = start_url or f"{UNTAPPD_BASE}/user/login"
+    chrome_args = [
+        "--args",
+        f"--remote-debugging-port={port}",
+        f"--user-data-dir={user_data_dir}",
+        "--new-window",
+        start_url,
+    ]
+
+    if shutil.which("open"):
+        command = ["open", "-na", "Google Chrome", *chrome_args]
+        subprocess.Popen(command)
+        return
+
+    chrome_binary = shutil.which("google-chrome") or shutil.which("chrome") or shutil.which("chromium")
+    if chrome_binary:
+        command = [
+            chrome_binary,
+            f"--remote-debugging-port={port}",
+            f"--user-data-dir={user_data_dir}",
+            "--new-window",
+            start_url,
+        ]
+        subprocess.Popen(command)
+        return
+
+    raise RuntimeError(
+        "Could not find Google Chrome. Launch Chrome manually with remote debugging enabled instead."
+    )
+
+
 def login(
     username: str,
     password: str,
@@ -223,6 +272,269 @@ def wait_for_manual_login(driver: webdriver.Remote, timeout: int = 300):
     print(f"Waiting up to {timeout} seconds for manual login to complete...")
     WebDriverWait(driver, timeout).until(lambda d: "/login" not in d.current_url.lower())
     print("✓ Manual login detected.")
+
+
+def fetch_beers(
+    driver: webdriver.Remote,
+    username: str,
+    backstop_total: Optional[int] = None,
+    max_clicks: int = 200,
+) -> pd.DataFrame:
+    """
+    Load a user's beer history page, keep clicking "Show More" until all entries are loaded,
+    then parse all visible beers.
+    """
+    url = f"{UNTAPPD_BASE}/user/{username}/beers"
+    print(f"Loading beer history for {username}...")
+    driver.get(url)
+    time.sleep(2)
+
+    previous_count = -1
+    stable_rounds = 0
+
+    for click_num in range(1, max_clicks + 1):
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        items = find_beer_items(soup)
+        current_count = len(items)
+        print(f"Pass {click_num}: found {current_count} beer entries...")
+
+        if backstop_total is not None and current_count >= backstop_total:
+            print(f"Reached backstop total of {backstop_total} beers.")
+            break
+
+        if current_count == previous_count:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+            previous_count = current_count
+
+        if stable_rounds >= 3 and not click_show_more(driver):
+            break
+
+        if click_show_more(driver):
+            time.sleep(1.5)
+            continue
+
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(1.5)
+
+        if stable_rounds >= 3:
+            break
+
+    final_soup = BeautifulSoup(driver.page_source, "html.parser")
+    beer_items = find_beer_items(final_soup)
+    beers = []
+    for item in beer_items:
+        parsed = parse_beer_item(item)
+        if parsed:
+            beers.append(parsed)
+
+    if not beers:
+        raise ValueError("No beer history entries were found on the /beers page.")
+
+    df = pd.DataFrame(beers)
+    for date_col in ("first_checkin", "recent_checkin"):
+        if date_col in df.columns:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
+    sort_cols = [col for col in ["recent_checkin", "first_checkin", "beer_name"] if col in df.columns]
+    if sort_cols:
+        df = df.sort_values(sort_cols, ascending=[False, False, True][: len(sort_cols)], na_position="last")
+    df = df.reset_index(drop=True)
+    return format_beer_history_dataframe(df)
+
+
+def find_beer_items(soup: BeautifulSoup):
+    """Locate beer-history cards on the page with a few fallback selectors."""
+    selectors = [
+        "div.beer-item",
+        "div.beer",
+        "div.item",
+        "div[class*='beer-item']",
+        "div[class*='distinct'] div.item",
+    ]
+
+    seen = set()
+    items = []
+    for selector in selectors:
+        for node in soup.select(selector):
+            beer_link = node.find("a", href=lambda href: href and ("/beer/" in href or "/b/" in href))
+            if not beer_link:
+                continue
+            node_id = id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            items.append(node)
+    return items
+
+
+def click_show_more(driver: webdriver.Remote) -> bool:
+    """Click the page's Show More control if it is available."""
+    show_more_xpaths = [
+        "//a[normalize-space()='Show More']",
+        "//button[normalize-space()='Show More']",
+        "//*[self::a or self::button][contains(normalize-space(), 'Show More')]",
+    ]
+
+    for xpath in show_more_xpaths:
+        try:
+            button = WebDriverWait(driver, 2).until(
+                EC.presence_of_element_located((By.XPATH, xpath))
+            )
+        except TimeoutException:
+            continue
+
+        try:
+            driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", button)
+            time.sleep(0.5)
+            if not button.is_displayed():
+                continue
+            if not button.is_enabled():
+                continue
+            driver.execute_script("arguments[0].click();", button)
+            print("Clicked Show More...")
+            return True
+        except Exception:
+            continue
+
+    return False
+
+
+def parse_beer_item(item) -> Optional[dict]:
+    """Parse one beer-history entry from the Untappd /beers page."""
+    text = " ".join(item.stripped_strings)
+    if not text:
+        return None
+
+    pieces = [piece.strip() for piece in item.stripped_strings if piece.strip()]
+    display_pieces = [
+        piece for piece in pieces
+        if not re.search(r"(your rating|global rating|abv|ibu|first:|recent:|total:|search|sort & filter)", piece, re.I)
+    ]
+
+    beer_link = first_matching_anchor(
+        item,
+        lambda href: href and ("/beer/" in href or "/b/" in href),
+    )
+    brewery_link = first_matching_anchor(
+        item,
+        lambda href: href and "/brewery/" in href,
+    )
+
+    beer_name = clean_anchor_text(beer_link)
+    brewery_name = clean_anchor_text(brewery_link)
+
+    if not beer_name and display_pieces:
+        beer_name = display_pieces[0]
+    if not brewery_name and len(display_pieces) > 1:
+        brewery_name = display_pieces[1]
+
+    beer_name = beer_name or "Unknown"
+    brewery_name = brewery_name or "Unknown"
+
+    beer_url = None
+    if beer_link:
+        href = beer_link.get("href")
+        if href:
+            beer_url = f"{UNTAPPD_BASE}{href}" if href.startswith("/") else href
+
+    style = None
+    if brewery_name != "Unknown" and brewery_name in display_pieces:
+        brewery_index = display_pieces.index(brewery_name)
+        if brewery_index + 1 < len(display_pieces):
+            candidate = display_pieces[brewery_index + 1]
+            if candidate not in {beer_name, brewery_name}:
+                style = candidate
+    if not style and len(display_pieces) > 2:
+        candidate = display_pieces[2]
+        if candidate not in {beer_name, brewery_name}:
+            style = candidate
+
+    your_rating = extract_float(r"YOUR RATING\s*\(([\d.]+)\)", text)
+    global_rating = extract_float(r"GLOBAL RATING\s*\(([\d.]+)\)", text)
+    abv = extract_float(r"([\d.]+)%\s*ABV", text)
+    ibu = extract_float(r"([\d.]+)\s*IBU", text)
+    total = extract_int(r"TOTAL:\s*(\d+)", text)
+
+    first_checkin = extract_date(text, "FIRST")
+    recent_checkin = extract_date(text, "RECENT")
+
+    return {
+        "beer_name": beer_name,
+        "brewery_name": brewery_name,
+        "beer_style": style,
+        "beer_url": beer_url,
+        "your_rating": your_rating,
+        "global_rating": global_rating,
+        "abv": abv,
+        "ibu": ibu,
+        "first_checkin": first_checkin,
+        "recent_checkin": recent_checkin,
+        "total_checkins": total,
+    }
+
+
+def clean_anchor_text(anchor) -> str:
+    if not anchor:
+        return ""
+    return anchor.get_text(" ", strip=True)
+
+
+def first_matching_anchor(item, href_matcher):
+    for anchor in item.find_all("a", href=href_matcher):
+        if clean_anchor_text(anchor):
+            return anchor
+    return item.find("a", href=href_matcher)
+
+
+def format_beer_history_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert the raw scraper output into the user-facing beer-history columns.
+    """
+    formatted = pd.DataFrame({
+        "Beer Name": df.get("beer_name"),
+        "Location": df.get("brewery_name"),
+        "Beer Type": df.get("beer_style"),
+        "My Rating": df.get("your_rating"),
+        "Global Rating": df.get("global_rating"),
+        "First Date": format_date_series(df.get("first_checkin")),
+        "Recent Date": format_date_series(df.get("recent_checkin")),
+    })
+    return formatted
+
+
+def format_date_series(series):
+    if series is None:
+        return None
+    return series.dt.strftime("%Y-%m-%d").where(series.notna(), None)
+
+
+def extract_float(pattern: str, text: str) -> Optional[float]:
+    match = re.search(pattern, text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_int(pattern: str, text: str) -> Optional[int]:
+    match = re.search(pattern, text, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def extract_date(text: str, label: str) -> Optional[str]:
+    match = re.search(rf"{label}:\s*(\d{{1,2}}/\d{{1,2}}/\d{{2,4}})", text, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    return None
 
 
 def fetch_checkins(driver: webdriver.Remote, username: str) -> pd.DataFrame:

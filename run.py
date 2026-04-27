@@ -32,9 +32,11 @@ from untapped_scraper import (
     load_credentials as scraper_load_credentials,
 )
 from untapped_selenium import (
+    launch_chrome_with_debugger,
     login as selenium_login,
     start_manual_login as selenium_start_manual_login,
     wait_for_manual_login as selenium_wait_for_manual_login,
+    fetch_beers as selenium_fetch_beers,
     fetch_checkins as selenium_fetch_checkins,
     get_user_info as selenium_get_user_info,
     save_credentials as selenium_save_credentials,
@@ -167,6 +169,8 @@ Examples:
   python run.py selenium-fetch --browser chrome --output checkins.csv
   python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --output checkins.csv
   python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --attach-debugger 127.0.0.1:9222 --output checkins.csv
+  python run.py selenium-launch-chrome --page beers
+  python run.py selenium-fetch-beers --username YOUR_USERNAME --attach-debugger 127.0.0.1:9222 --output beers.csv
 
   # Login to Untappd API (if you have a commercial account)
   python run.py login --client-id YOUR_ID --client-secret YOUR_SECRET
@@ -297,6 +301,63 @@ Examples:
     selenium_manual_fetch_parser.add_argument(
         "--attach-debugger",
         help="Attach to an existing Chrome instance (example: 127.0.0.1:9222)",
+    )
+
+    selenium_launch_chrome_parser = subparsers.add_parser(
+        "selenium-launch-chrome",
+        help="Launch a real Chrome window with remote debugging for manual Untappd login",
+    )
+    selenium_launch_chrome_parser.add_argument(
+        "--page",
+        default="login",
+        choices=["login", "beers", "checkins"],
+        help="Which Untappd page to open first",
+    )
+    selenium_launch_chrome_parser.add_argument(
+        "--username",
+        help="Untappd username used when opening a user-specific page like beers or checkins",
+    )
+    selenium_launch_chrome_parser.add_argument(
+        "--debugger-address",
+        default="127.0.0.1:9222",
+        help="Debugger address that Selenium will attach to later",
+    )
+    selenium_launch_chrome_parser.add_argument(
+        "--user-data-dir",
+        default="/tmp/untappd-manual",
+        help="Chrome profile directory for the manual session",
+    )
+
+    selenium_fetch_beers_parser = subparsers.add_parser(
+        "selenium-fetch-beers",
+        help="Fetch beer history from the Untappd /beers page using Selenium",
+    )
+    selenium_fetch_beers_parser.add_argument(
+        "--username",
+        required=True,
+        help="Untappd username whose beer history should be downloaded",
+    )
+    selenium_fetch_beers_parser.add_argument("--output", "-o", required=True, help="Save fetched data to CSV file")
+    selenium_fetch_beers_parser.add_argument(
+        "--browser",
+        default="chrome",
+        choices=["firefox", "chrome"],
+        help="Browser engine for Selenium",
+    )
+    selenium_fetch_beers_parser.add_argument(
+        "--attach-debugger",
+        help="Attach to an existing Chrome instance (example: 127.0.0.1:9222)",
+    )
+    selenium_fetch_beers_parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="How long to wait (seconds) for you to finish manual login when not attaching to an existing browser",
+    )
+    selenium_fetch_beers_parser.add_argument(
+        "--backstop-total",
+        type=int,
+        help="Expected total beer count; stop clicking Show More once this many beers are loaded",
     )
 
     # Original API login command
@@ -743,6 +804,74 @@ def handle_selenium_manual_fetch(args):
                 open_html_files(saved_paths)
 
 
+def handle_selenium_launch_chrome(args):
+    """Launch a real Chrome window with remote debugging enabled."""
+    if args.page in {"beers", "checkins"} and not args.username:
+        raise SystemExit("--username is required when using --page beers or --page checkins.")
+
+    if args.page == "login":
+        start_url = "https://untappd.com/user/login"
+    elif args.page == "beers":
+        start_url = f"https://untappd.com/user/{args.username}/beers"
+    else:
+        start_url = f"https://untappd.com/user/{args.username}/checkins"
+
+    try:
+        launch_chrome_with_debugger(
+            debugger_address=args.debugger_address,
+            user_data_dir=args.user_data_dir,
+            start_url=start_url,
+        )
+        print("Opened Chrome with remote debugging enabled.")
+        print(f"Debugger address: {args.debugger_address}")
+        print(f"User data dir: {args.user_data_dir}")
+        print(f"Start URL: {start_url}")
+        print("After you finish logging in manually, run selenium-fetch-beers with the same debugger address.")
+    except Exception as e:
+        print(f"✗ Could not launch Chrome: {e}")
+        raise SystemExit(1)
+
+
+def handle_selenium_fetch_beers(args):
+    """Fetch beer history from the Untappd /beers page."""
+    driver = None
+    try:
+        if args.attach_debugger:
+            print(f"Attaching to Chrome debugger at {args.attach_debugger}...")
+            driver = selenium_start_manual_login(
+                browser="chrome",
+                headless=False,
+                attach_debugger=args.attach_debugger,
+            )
+        else:
+            print(f"Launching Selenium browser ({args.browser}) for manual login...")
+            driver = selenium_start_manual_login(
+                browser=args.browser,
+                headless=False,
+                attach_debugger=None,
+            )
+            selenium_wait_for_manual_login(driver, timeout=args.timeout)
+
+        print(f"Fetching beer history from {args.username}...")
+        df = selenium_fetch_beers(
+            driver,
+            args.username,
+            backstop_total=args.backstop_total,
+        )
+        print(f"✓ Downloaded {len(df)} beer history entries")
+    except Exception as e:
+        print(f"✗ Error fetching beer history: {e}")
+        raise SystemExit(1)
+    finally:
+        if driver is not None:
+            quit_driver(driver)
+
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False)
+    print(f"Saved data to {output_path}")
+
+
 def handle_render(args):
     """Render charts from CSV/JSON file."""
     cli_main(args)
@@ -761,6 +890,10 @@ def main():
         handle_selenium_fetch(args)
     elif args.command == "selenium-manual-fetch":
         handle_selenium_manual_fetch(args)
+    elif args.command == "selenium-launch-chrome":
+        handle_selenium_launch_chrome(args)
+    elif args.command == "selenium-fetch-beers":
+        handle_selenium_fetch_beers(args)
     elif args.command == "login":
         handle_login(args)
     elif args.command == "fetch":

@@ -72,9 +72,13 @@ python run.py selenium-fetch --browser chrome --headed --output-dir ./charts
 python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --output my_checkins.csv
 
 # If CAPTCHA still blocks Selenium-launched Chrome, login first in a real Chrome window:
-#   google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/untappd-manual
+#   python run.py selenium-launch-chrome --page login
 # then attach Selenium to that live browser
 python run.py selenium-manual-fetch --username YOUR_USERNAME --browser chrome --attach-debugger 127.0.0.1:9222 --output my_checkins.csv
+
+# Beer history workflow: open a real Chrome window, log in manually, then export /beers to CSV
+python run.py selenium-launch-chrome --page beers --username YOUR_USERNAME
+python run.py selenium-fetch-beers --username YOUR_USERNAME --attach-debugger 127.0.0.1:9222 --backstop-total 250 --output my_beers.csv
 ```
 
 4. View the results in Streamlit:

@@ -169,6 +169,10 @@ python3 run.py render --file DATA.csv [options]
 # Launch Streamlit dashboard
 python3 run.py streamlit
 
+# Launch a real Chrome window for manual login, then export beer history
+python3 run.py selenium-launch-chrome --page beers --username YOUR_USERNAME
+python3 run.py selenium-fetch-beers --username YOUR_USERNAME --attach-debugger 127.0.0.1:9222 --backstop-total 250 --output my_beers.csv
+
 # Show help
 python3 run.py --help
 python3 run.py scrape-login --help
@@ -205,4 +209,3 @@ pip install beautifulsoup4
 For issues with the Untappd API, visit: https://untappd.com/api/docs
 
 For questions about this dashboard, check the README.md file.
-
