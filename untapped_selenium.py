@@ -2,8 +2,10 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import time
+from urllib.request import urlopen
 from pathlib import Path
 from typing import Optional
 
@@ -115,6 +117,40 @@ def create_chrome_driver_from_debugger(debugger_address: str) -> webdriver.Remot
     options.add_experimental_option("debuggerAddress", debugger_address)
     service = ChromeService(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
+
+
+def is_debugger_ready(debugger_address: str, timeout: float = 2.0) -> bool:
+    """
+    Check whether Chrome's remote debugger endpoint is reachable.
+    """
+    host, _, port_text = debugger_address.partition(":")
+    if not host or not port_text.isdigit():
+        return False
+
+    try:
+        with socket.create_connection((host, int(port_text)), timeout=timeout):
+            pass
+    except OSError:
+        return False
+
+    try:
+        with urlopen(f"http://{debugger_address}/json/version", timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return bool(payload.get("Browser"))
+    except Exception:
+        return False
+
+
+def wait_for_debugger(debugger_address: str, timeout: int = 20) -> bool:
+    """
+    Wait for a Chrome debugger endpoint to become available.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_debugger_ready(debugger_address):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def launch_chrome_with_debugger(
@@ -337,6 +373,8 @@ def fetch_beers(
         if date_col in df.columns:
             df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
 
+    df = enrich_producer_locations(driver, df)
+
     sort_cols = [col for col in ["recent_checkin", "first_checkin", "beer_name"] if col in df.columns]
     if sort_cols:
         df = df.sort_values(sort_cols, ascending=[False, False, True][: len(sort_cols)], na_position="last")
@@ -417,10 +455,7 @@ def parse_beer_item(item) -> Optional[dict]:
         item,
         lambda href: href and ("/beer/" in href or "/b/" in href),
     )
-    brewery_link = first_matching_anchor(
-        item,
-        lambda href: href and "/brewery/" in href,
-    )
+    brewery_link = find_producer_anchor(item)
 
     beer_name = clean_anchor_text(beer_link)
     brewery_name = clean_anchor_text(brewery_link)
@@ -463,6 +498,7 @@ def parse_beer_item(item) -> Optional[dict]:
     return {
         "beer_name": beer_name,
         "brewery_name": brewery_name,
+        "brewery_url": build_absolute_url(brewery_link.get("href")) if brewery_link else None,
         "beer_style": style,
         "beer_url": beer_url,
         "your_rating": your_rating,
@@ -481,6 +517,39 @@ def clean_anchor_text(anchor) -> str:
     return anchor.get_text(" ", strip=True)
 
 
+def build_absolute_url(href: Optional[str]) -> Optional[str]:
+    if not href:
+        return None
+    if href.startswith("/"):
+        return f"{UNTAPPD_BASE}{href}"
+    return href
+
+
+def find_producer_anchor(item):
+    """
+    Find the producer link for a beer-history item. Untappd often uses root slugs
+    like /samadams instead of /brewery/... links.
+    """
+    anchors = item.find_all("a", href=True)
+
+    for anchor in anchors:
+        href = anchor.get("href", "")
+        text = clean_anchor_text(anchor)
+        if not text:
+            continue
+        if "/beer/" in href or "/b/" in href or "/user/" in href or "/photo/" in href:
+            continue
+        if href.startswith("#") or href.startswith("javascript:"):
+            continue
+        return anchor
+
+    for anchor in anchors:
+        href = anchor.get("href", "")
+        if href and "/brewery/" in href:
+            return anchor
+    return None
+
+
 def first_matching_anchor(item, href_matcher):
     for anchor in item.find_all("a", href=href_matcher):
         if clean_anchor_text(anchor):
@@ -494,7 +563,8 @@ def format_beer_history_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
     formatted = pd.DataFrame({
         "Beer Name": df.get("beer_name"),
-        "Location": df.get("brewery_name"),
+        "Producer": df.get("brewery_name"),
+        "Location": df.get("producer_location"),
         "Beer Type": df.get("beer_style"),
         "My Rating": df.get("your_rating"),
         "Global Rating": df.get("global_rating"),
@@ -508,6 +578,162 @@ def format_date_series(series):
     if series is None:
         return None
     return series.dt.strftime("%Y-%m-%d").where(series.notna(), None)
+
+
+def enrich_producer_locations(driver: webdriver.Remote, df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Visit each unique producer page once and extract a readable city/state location.
+    """
+    if df.empty or "brewery_name" not in df.columns:
+        return df
+
+    producer_cache = {}
+    unique_producers = (
+        df[["brewery_name", "brewery_url"]]
+        .drop_duplicates()
+        .fillna("")
+        .to_dict("records")
+    )
+
+    for idx, producer in enumerate(unique_producers, start=1):
+        producer_name = producer.get("brewery_name", "").strip()
+        producer_url = producer.get("brewery_url", "").strip()
+        if not producer_name or not producer_url:
+            producer_cache[producer_name] = None
+            continue
+
+        print(f"Resolving producer location {idx}/{len(unique_producers)}: {producer_name}")
+        producer_cache[producer_name] = fetch_producer_location(driver, producer_url)
+        time.sleep(0.5)
+
+    enriched = df.copy()
+    enriched["producer_location"] = enriched["brewery_name"].map(producer_cache)
+    return enriched
+
+
+def fetch_producer_location(driver: webdriver.Remote, producer_url: str) -> Optional[str]:
+    """
+    Scrape a producer page for a location string such as 'City, ST'.
+    """
+    try:
+        driver.get(producer_url)
+        time.sleep(1.5)
+        soup = BeautifulSoup(driver.page_source, "html.parser")
+        location = extract_location_from_producer_page(soup)
+        if location:
+            print(f"Resolved producer location: {location}")
+        else:
+            print(f"Warning: No producer location found on {producer_url}")
+        return location
+    except Exception as e:
+        print(f"Warning: Could not fetch producer page {producer_url}: {e}")
+        return None
+
+
+def extract_location_from_producer_page(soup: BeautifulSoup) -> Optional[str]:
+    """
+    Try to extract the location line from the producer header block.
+    """
+    candidates = []
+
+    header_selectors = [
+        "div.top",
+        "div.name",
+        "div.info",
+        "div.content",
+        "div#slide",
+        "body",
+    ]
+    for selector in header_selectors:
+        for node in soup.select(selector):
+            header_location = extract_location_from_header_block(node)
+            if header_location:
+                candidates.append(header_location)
+        if candidates:
+            break
+
+    selectors = [
+        ".location",
+        ".address",
+        "[itemprop='address']",
+        "[itemprop='addressLocality']",
+    ]
+    for selector in selectors:
+        for node in soup.select(selector):
+            text = normalize_location_text(node.get_text(" ", strip=True))
+            if text:
+                candidates.append(text)
+
+    page_text = " ".join(soup.stripped_strings)
+    regex_candidates = re.findall(
+        r"([A-Z][A-Za-zÀ-ÿ0-9.&'\- ]+,\s*(?:[A-Z]{2}|[A-Z][A-Za-zÀ-ÿ'\- ]+)\s+(?:United States|USA|Canada|Mexico|Ireland|England|Scotland|Wales|Germany|Australia|New Zealand|Japan|Czechia|Czech Republic|Belgium|Austria|Ukraine|Denmark|Netherlands|Italy|Spain|France))",
+        page_text,
+    )
+    for candidate in regex_candidates:
+        text = normalize_location_text(candidate)
+        if text:
+            candidates.append(text)
+
+    for candidate in candidates:
+        if is_reasonable_location(candidate):
+            return simplify_location(candidate)
+    return None
+
+
+def extract_location_from_header_block(node) -> Optional[str]:
+    strings = [s.strip() for s in node.stripped_strings if s.strip()]
+    for i, text in enumerate(strings):
+        normalized = normalize_location_text(text)
+        if not normalized:
+            continue
+        if is_reasonable_location(normalized):
+            return normalized
+        if "," in normalized and i + 1 < len(strings):
+            combined = normalize_location_text(f"{normalized} {strings[i + 1]}")
+            if combined and is_reasonable_location(combined):
+                return combined
+    return None
+
+
+def normalize_location_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    text = re.sub(r"\s+", " ", text).strip(" ,")
+    text = re.sub(r"\s*·\s*", " ", text)
+    return text or None
+
+
+def is_reasonable_location(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    blocked = ("your rating", "global rating", "show more", "beer history", "untappd")
+    if any(token in lowered for token in blocked):
+        return False
+    if len(text) < 4:
+        return False
+    if "," not in text:
+        return False
+    location_markers = (
+        "united states", "usa", "canada", "mexico", "ireland", "england", "scotland",
+        "wales", "germany", "australia", "new zealand", "japan", "czechia",
+        "czech republic", "belgium", "austria", "ukraine", "denmark", "netherlands",
+        "italy", "spain", "france", "brazil", "chile"
+    )
+    us_state_match = re.search(r",\s*[A-Z]{2}(?:\s|$)", text)
+    country_match = any(marker in lowered for marker in location_markers)
+    return bool(us_state_match or country_match)
+
+
+def simplify_location(text: str) -> str:
+    """
+    Keep the city/state style location the user wants, e.g. 'Boston, MA'.
+    """
+    text = text.strip()
+    match = re.match(r"(.+?,\s*[A-Z]{2})\s+United States$", text, flags=re.I)
+    if match:
+        return match.group(1)
+    return text
 
 
 def extract_float(pattern: str, text: str) -> Optional[float]:

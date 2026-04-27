@@ -1,3 +1,4 @@
+urllib3<2
 streamlit
 plotly
 streamlit-plotly-events

@@ -1,300 +1,231 @@
-import streamlit as st
-import pandas as pd
 from pathlib import Path
 
-from untapped import (
-    PREFERRED_COLUMNS,
-    create_checkin_chart,
-    create_rating_serving_chart,
-    create_state_map,
-    create_style_chart,
-    find_column,
-    format_count,
-    get_timeframe,
-    load_data,
-    parse_dataframe,
-)
-from untapped_api import (
-    authenticate,
-    fetch_user_checkins,
-    get_user_info,
-    load_credentials,
-    validate_token,
-)
-from untapped_scraper import (
-    login as scraper_login,
-    fetch_checkins as scraper_fetch_checkins,
-    get_user_info as scraper_get_user_info,
-    save_credentials as scraper_save_credentials,
-    load_credentials as scraper_load_credentials,
-)
+import pandas as pd
+import plotly.express as px
+import streamlit as st
+from untapped import create_state_map, create_us_state_map, normalize_country, normalize_state
 
-st.set_page_config(page_title="Untappd Drinks Dashboard", layout="wide")
+DEFAULT_DATA_PATH = Path("my_beers.csv")
+REQUIRED_COLUMNS = [
+    "Beer Name",
+    "Producer",
+    "Location",
+    "Beer Type",
+    "My Rating",
+    "Global Rating",
+    "First Date",
+    "Recent Date",
+]
 
-st.title("🍺 Untappd Drinks Dashboard")
-st.markdown(
-    "Explore where you've checked in drinks, top beer styles, and serving-style ratings with interactive visualizations."
-)
 
-# Sidebar for input selection
-st.sidebar.header("Data Source")
-data_source = st.sidebar.radio("Choose data source:", ["Upload CSV/JSON", "Web Scraping", "Untappd API"])
+def load_beer_history(source):
+    df = pd.read_csv(source)
+    if "Producer" not in df.columns and "Location" in df.columns:
+        # Backward compatibility for older exports where Location held the producer name.
+        df["Producer"] = df["Location"]
+        df["Location"] = None
+    missing = [column for column in REQUIRED_COLUMNS if column not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+    df["My Rating"] = pd.to_numeric(df["My Rating"], errors="coerce")
+    df["Global Rating"] = pd.to_numeric(df["Global Rating"], errors="coerce")
+    df["First Date"] = pd.to_datetime(df["First Date"], errors="coerce")
+    df["Recent Date"] = pd.to_datetime(df["Recent Date"], errors="coerce")
+    return df
+
+
+def extract_country_name_from_location(value):
+    if pd.isna(value):
+        return None
+
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    candidates = []
+    if parts:
+        candidates.extend(reversed(parts))
+    candidates.append(str(value).strip())
+
+    for candidate in candidates:
+        country_name = normalize_country(candidate)
+        if country_name:
+            return country_name
+        state_code = normalize_state(candidate)
+        if state_code:
+            return "United States"
+    return None
+
+
+def build_beer_location_map(df):
+    df_map = df.copy()
+    df_map["country_name"] = df_map["Location"].map(extract_country_name_from_location)
+    df_map["state_code"] = df_map["Location"].map(extract_state_code_from_location)
+    df_map["checkin_date"] = df_map["Recent Date"].fillna(df_map["First Date"])
+    df_map["place_name"] = df_map["Location"].fillna("Unknown")
+    return df_map
+
+
+def extract_state_code_from_location(value):
+    if pd.isna(value):
+        return None
+
+    parts = [part.strip() for part in str(value).split(",") if part.strip()]
+    candidates = []
+    if parts:
+        candidates.extend(reversed(parts))
+    candidates.append(str(value).strip())
+
+    for candidate in candidates:
+        state_code = normalize_state(candidate)
+        if state_code:
+            return state_code
+    return None
+
+
+st.set_page_config(page_title="Untappd Beer History", layout="wide")
+
+st.title("Untappd Beer History")
+st.markdown("Review your exported beer list, ratings, styles, and recent activity.")
+
+st.sidebar.header("Beer Data")
+source_mode = st.sidebar.radio("Source", ["Use my_beers.csv", "Upload CSV"])
+show_map = st.sidebar.checkbox("Show drink-location map", value=True)
+map_view = st.sidebar.radio("Map View", ["Global", "US States"], index=0) if show_map else None
 
 df = None
-df_raw = None
+error_message = None
+map_chart = None
+map_message = None
 
-if data_source == "Upload CSV/JSON":
-    st.sidebar.header("Upload & Field Mapping")
-    uploaded_file = st.sidebar.file_uploader("Upload Untappd export CSV or JSON", type=["csv", "json"])
-
+if source_mode == "Use my_beers.csv":
+    if DEFAULT_DATA_PATH.exists():
+        try:
+            df = load_beer_history(DEFAULT_DATA_PATH)
+            st.sidebar.success(f"Loaded {len(df)} rows from {DEFAULT_DATA_PATH.name}")
+        except Exception as exc:
+            error_message = str(exc)
+    else:
+        st.sidebar.info("Run `python run.py` first to create `my_beers.csv`.")
+else:
+    uploaded_file = st.sidebar.file_uploader("Upload beer history CSV", type=["csv"])
     if uploaded_file is not None:
         try:
-            df_raw = load_data(uploaded_file)
-            if not df_raw.empty:
-                st.success(f"Loaded {len(df_raw)} records from file")
-            else:
-                st.error("Uploaded file contains no rows")
-        except Exception as e:
-            st.error(f"Error loading file: {e}")
+            df = load_beer_history(uploaded_file)
+            st.sidebar.success(f"Loaded {len(df)} rows from uploaded file")
+        except Exception as exc:
+            error_message = str(exc)
 
-elif data_source == "Web Scraping":
-    st.sidebar.header("Untappd Web Scraping (No API Key Needed)")
-
-    scraper_creds = scraper_load_credentials()
-    has_scraper_creds = bool(scraper_creds.get("username") and scraper_creds.get("password"))
-
-    if has_scraper_creds:
-        st.sidebar.info(f"✓ Logged in as {scraper_creds['username']}")
-
-        if st.sidebar.button("📥 Fetch My Check-ins (Web Scraping)"):
-            try:
-                with st.spinner("Authenticating and fetching your check-ins..."):
-                    session = scraper_login(scraper_creds["username"], scraper_creds["password"])
-                    df_raw = scraper_fetch_checkins(session, scraper_creds["username"])
-                st.success(f"✓ Downloaded {len(df_raw)} check-ins")
-            except Exception as e:
-                st.error(f"Error fetching check-ins: {e}")
-
-        if st.sidebar.button("🚪 Logout (Web Scraping)"):
-            scraper_save_credentials("", "")
-            st.rerun()
-
-    else:
-        st.sidebar.info("Login using web scraping to fetch your check-ins without needing an API key.")
-
-        username = st.sidebar.text_input("Untappd Username")
-        password = st.sidebar.text_input("Untappd Password", type="password")
-
-        if st.sidebar.button("🔐 Login with Web Scraping"):
-            if username and password:
-                try:
-                    with st.spinner("Logging in..."):
-                        session = scraper_login(username, password)
-                    scraper_save_credentials(username, password)
-                    st.sidebar.success("✓ Successfully logged in!")
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"Login failed: {e}")
-            else:
-                st.sidebar.warning("Please enter both username and password")
-
-else:  # Untappd API
-    st.sidebar.header("Untappd API Authentication")
-
-    creds = load_credentials()
-    has_token = bool(creds.get("access_token"))
-
-    if has_token:
-        if st.sidebar.button("🔄 Refresh Token"):
-            if validate_token(creds["access_token"]):
-                st.sidebar.success("✓ Token is valid")
-            else:
-                st.sidebar.error("Token is invalid. Please login again.")
-                creds = {}
-
-    if not creds.get("access_token"):
-        st.sidebar.info(
-            """To authenticate with Untappd API:
-1. Register an app at https://untappd.com/api/dashboard
-2. Click 'Login to Untappd' below to authenticate
-
-⚠️ Note: Untappd API is limited to commercial accounts.
-Use "Web Scraping" for personal use instead!
-"""
-        )
-
-        col1, col2 = st.sidebar.columns(2)
-        with col1:
-            client_id = st.text_input("Client ID", type="password")
-        with col2:
-            client_secret = st.text_input("Client Secret", type="password")
-
-        if st.sidebar.button("🔐 Login to Untappd API"):
-            if client_id and client_secret:
-                try:
-                    with st.spinner("Authenticating with Untappd..."):
-                        access_token = authenticate(client_id, client_secret)
-                    st.sidebar.success("✓ Successfully authenticated!")
-                    st.rerun()
-                except Exception as e:
-                    st.sidebar.error(f"Authentication failed: {e}")
-            else:
-                st.sidebar.warning("Please provide both Client ID and Client Secret")
-
-    else:
-        try:
-            user_info = get_user_info(creds["access_token"])
-            st.sidebar.success(f"✓ Logged in as {user_info['username']}")
-
-            if st.sidebar.button("📥 Fetch My Check-ins (API)"):
-                with st.spinner("Fetching your check-ins from Untappd..."):
-                    try:
-                        df_raw = fetch_user_checkins(creds["access_token"])
-                        st.success(f"✓ Downloaded {len(df_raw)} check-ins")
-                    except Exception as e:
-                        st.error(f"Error fetching check-ins: {e}")
-
-            if st.sidebar.button("🚪 Logout"):
-                # Clear credentials
-                from untapped_api import save_credentials
-
-                save_credentials("", "", None)
-                st.rerun()
-
-        except Exception as e:
-            st.sidebar.error(f"Token validation failed: {e}")
-            if st.sidebar.button("🔄 Login Again"):
-                from untapped_api import save_credentials
-
-                save_credentials("", "", None)
-                st.rerun()
-
-
-# Process and display data
-if df_raw is not None and not df_raw.empty:
-    columns = list(df_raw.columns)
-
-    st.sidebar.header("Column Mapping")
-
-    detected_date = find_column(df_raw, PREFERRED_COLUMNS["date"])
-    detected_state = find_column(df_raw, PREFERRED_COLUMNS["state"])
-    detected_style = find_column(df_raw, PREFERRED_COLUMNS["style"])
-    detected_serving = find_column(df_raw, PREFERRED_COLUMNS["serving"])
-    detected_rating = find_column(df_raw, PREFERRED_COLUMNS["rating"])
-    detected_place = find_column(df_raw, PREFERRED_COLUMNS["place"])
-
-    date_col = st.sidebar.selectbox(
-        "Check-in date column",
-        columns,
-        index=columns.index(detected_date) if detected_date in columns else 0,
-    )
-    state_col = st.sidebar.selectbox(
-        "State column (optional)",
-        ["None"] + columns,
-        index=(["None"] + columns).index(detected_state) if detected_state in columns else 0,
-    )
-    style_col = st.sidebar.selectbox(
-        "Beer style column",
-        ["None"] + columns,
-        index=(["None"] + columns).index(detected_style) if detected_style in columns else 0,
-    )
-    serving_col = st.sidebar.selectbox(
-        "Serving style column",
-        ["None"] + columns,
-        index=(["None"] + columns).index(detected_serving) if detected_serving in columns else 0,
-    )
-    rating_col = st.sidebar.selectbox(
-        "Rating column",
-        ["None"] + columns,
-        index=(["None"] + columns).index(detected_rating) if detected_rating in columns else 0,
-    )
-    place_col = st.sidebar.selectbox(
-        "Place / venue column",
-        ["None"] + columns,
-        index=(["None"] + columns).index(detected_place) if detected_place in columns else 0,
-    )
-
-    state_col = None if state_col == "None" else state_col
-    style_col = None if style_col == "None" else style_col
-    serving_col = None if serving_col == "None" else serving_col
-    rating_col = None if rating_col == "None" else rating_col
-    place_col = None if place_col == "None" else place_col
-
+if show_map:
     try:
-        df = parse_dataframe(df_raw, date_col, state_col, style_col, serving_col, rating_col, place_col)
-    except Exception as e:
-        st.error(f"Error parsing data: {e}")
-        df = None
+        if df is not None and not df.empty:
+            df_map = build_beer_location_map(df)
+            if map_view == "US States":
+                map_chart = create_us_state_map(df_map)
+                if map_chart is None:
+                    map_message = "The `Location` values in `my_beers.csv` did not contain enough U.S. state information to build the U.S. map."
+            else:
+                map_chart = create_state_map(df_map)
+                if map_chart is None:
+                    map_message = "The `Location` values in `my_beers.csv` did not contain enough country information to build the global map."
+    except Exception as exc:
+        map_message = f"Could not build map from `my_beers.csv`: {exc}"
+
+if error_message:
+    st.error(error_message)
 
 if df is not None and not df.empty:
-    st.sidebar.header("Filters")
-    timeframe = st.sidebar.radio("Time range", ["Week", "Month", "Year", "Year to date"], index=1)
-    filtered_df, cutoff, max_date = get_timeframe(df, timeframe)
+    beer_type_options = sorted(value for value in df["Beer Type"].dropna().unique() if str(value).strip())
+    producer_options = sorted(value for value in df["Producer"].dropna().unique() if str(value).strip())
+    location_options = sorted(value for value in df["Location"].dropna().unique() if str(value).strip())
 
-    if filtered_df.empty:
-        st.warning("No check-ins found in the selected timeframe.")
-    else:
-        total_checkins = filtered_df.shape[0]
-        unique_places = filtered_df["place_name"].nunique()
-        average_rating = (
-            filtered_df["rating"].dropna().mean() if "rating" in filtered_df.columns else None
-        )
-        states_visited = filtered_df["state_code"].dropna().nunique()
+    selected_types = st.sidebar.multiselect("Beer Type", beer_type_options)
+    selected_producers = st.sidebar.multiselect("Producer", producer_options)
+    selected_locations = st.sidebar.multiselect("Location", location_options)
+    minimum_my_rating = st.sidebar.slider("Minimum My Rating", 0.0, 5.0, 0.0, 0.25)
 
-        st.subheader(f"Summary: {timeframe}")
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Check-ins", format_count(total_checkins))
-        metric_cols[1].metric("Unique places", format_count(unique_places))
-        metric_cols[2].metric(
-            "Average rating", f"{average_rating:.2f}" if pd.notna(average_rating) else "—"
-        )
-        metric_cols[3].metric("States visited", format_count(states_visited))
+    filtered_df = df.copy()
+    if selected_types:
+        filtered_df = filtered_df[filtered_df["Beer Type"].isin(selected_types)]
+    if selected_producers:
+        filtered_df = filtered_df[filtered_df["Producer"].isin(selected_producers)]
+    if selected_locations:
+        filtered_df = filtered_df[filtered_df["Location"].isin(selected_locations)]
+    filtered_df = filtered_df[
+        filtered_df["My Rating"].fillna(0) >= minimum_my_rating
+    ]
 
-        st.markdown("---")
-        map_chart = create_state_map(filtered_df)
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Unique Beers", f"{len(filtered_df):,}")
+    metric_cols[1].metric("Producers", f"{filtered_df['Producer'].fillna('').replace('', pd.NA).dropna().nunique():,}")
+    metric_cols[2].metric(
+        "Avg My Rating",
+        f"{filtered_df['My Rating'].dropna().mean():.2f}" if filtered_df["My Rating"].dropna().any() else "—",
+    )
+    metric_cols[3].metric(
+        "Avg Global Rating",
+        f"{filtered_df['Global Rating'].dropna().mean():.2f}" if filtered_df["Global Rating"].dropna().any() else "—",
+    )
+
+    st.markdown("---")
+
+    if show_map:
+        st.subheader("Where Your Beer is Brewed")
         if map_chart is not None:
             st.plotly_chart(map_chart, use_container_width=True)
-        else:
-            st.info("No valid state data to display on map.")
-
+        elif map_message:
+            st.info(map_message)
         st.markdown("---")
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            checkin_chart = create_checkin_chart(filtered_df, timeframe)
-            if checkin_chart is not None:
-                st.plotly_chart(checkin_chart, use_container_width=True)
-            else:
-                st.info("Not enough data to create a check-in trend chart.")
 
-        with col2:
-            style_chart = create_style_chart(filtered_df)
-            if style_chart is not None:
-                st.plotly_chart(style_chart, use_container_width=True)
-            else:
-                st.info("Not enough data to create a beer style chart.")
+    chart_col1, chart_col2 = st.columns(2)
+    with chart_col1:
+        style_summary = (
+            filtered_df["Beer Type"]
+            .fillna("Unknown")
+            .value_counts()
+            .head(15)
+            .rename_axis("Beer Type")
+            .reset_index(name="Count")
+        )
+        if not style_summary.empty:
+            st.plotly_chart(
+                px.bar(style_summary, x="Count", y="Beer Type", orientation="h", title="Top Beer Types"),
+                use_container_width=True,
+            )
 
-        st.markdown("---")
-        rating_chart = create_rating_serving_chart(filtered_df)
-        if rating_chart is not None:
-            st.plotly_chart(rating_chart, use_container_width=True)
-        else:
-            st.info("Not enough serving-style or rating data to create the chart.")
+    with chart_col2:
+        producer_summary = (
+            filtered_df["Producer"]
+            .fillna("Unknown")
+            .value_counts()
+            .head(15)
+            .rename_axis("Producer")
+            .reset_index(name="Count")
+        )
+        if not producer_summary.empty:
+            st.plotly_chart(
+                px.bar(producer_summary, x="Count", y="Producer", orientation="h", title="Top Producers"),
+                use_container_width=True,
+            )
 
-        st.markdown("---")
-        st.subheader("Recent check-ins")
-        st.dataframe(
-            filtered_df.sort_values("checkin_date", ascending=False)
-            .loc[
-                :,
-                ["checkin_date", "place_name", "state_code", "beer_style", "serving_style", "rating"],
-            ]
-            .head(25),
+    st.markdown("---")
+
+    recent_timeline = filtered_df.dropna(subset=["Recent Date"]).copy()
+    recent_timeline["Month"] = recent_timeline["Recent Date"].dt.to_period("M").astype(str)
+    recent_timeline = (
+        recent_timeline.groupby("Month")
+        .size()
+        .reset_index(name="Beers")
+    )
+    if not recent_timeline.empty:
+        st.plotly_chart(
+            px.line(recent_timeline, x="Month", y="Beers", markers=True, title="Recent Date Timeline"),
             use_container_width=True,
         )
 
-elif data_source == "Upload CSV/JSON":
-    st.info("👆 Upload a CSV or JSON file from Untappd to get started!")
-elif data_source == "Web Scraping":
-    st.info("👆 Click 'Login with Web Scraping' in the sidebar and fetch your check-ins (no API key needed)!")
+    st.markdown("---")
+    st.subheader("Beer Table")
+    st.dataframe(
+        filtered_df.sort_values("Recent Date", ascending=False, na_position="last"),
+        use_container_width=True,
+    )
 else:
-    st.info("👆 Click 'Login to Untappd API' in the sidebar and fetch your check-ins!")
+    st.info("Load `my_beers.csv` or upload a beer-history CSV to get started.")
