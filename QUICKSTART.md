@@ -1,6 +1,6 @@
 # Quick Start
 
-Supported Python versions: `3.9` and `3.10`
+Supported Python versions: `3.9+`
 
 ```bash
 cd /Users/jacobbickus/Python_Files/apps/untapped_data
@@ -12,11 +12,18 @@ Default behavior:
 
 - If `my_beers.csv` already exists, opens Streamlit immediately
 - Use `python3 run.py --update` to force a fresh Untappd download
-- Otherwise opens Chrome at `https://untappd.com/user/jb2019/beers`
+- Otherwise opens Chrome at `https://untappd.com/user/<configured-username>/beers`
 - Attaches Selenium at `127.0.0.1:9222`
 - Exports to `my_beers.csv`
-- Uses the current row count of `my_beers.csv` as the default backstop total if the file already exists
+- Uses `--backstop-total` if you pass one during a refresh
 - Opens Streamlit after the export finishes
+
+Desktop bundle behavior:
+
+- On macOS, open `Untappd Beer History.app`
+- On Windows, open `Windows/start_desktop_app.bat`
+- On first launch, the app asks for the Untappd username and saves it to `app_config.json`
+- If no `my_beers.csv` exists yet, the launcher automatically starts the first sync
 
 Useful commands:
 

@@ -7,3 +7,5 @@ requests
 beautifulsoup4
 selenium
 webdriver-manager
+pyobjc-core; sys_platform == "darwin"
+pyobjc-framework-Cocoa; sys_platform == "darwin"

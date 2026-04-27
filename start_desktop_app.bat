@@ -47,23 +47,6 @@ call ".venv\Scripts\activate.bat"
 python -m pip install --upgrade pip >nul
 python -m pip install -r requirements.txt >nul
 
-for /f "usebackq delims=" %%i in (`python -c "from app_config import get_configured_username; print(get_configured_username(''))"`) do set "CONFIGURED_USERNAME=%%i"
-if "%CONFIGURED_USERNAME%"=="" (
-  echo Welcome to Untappd Beer History.
-  set /p CONFIGURED_USERNAME=Enter your Untappd username: 
-  if "%CONFIGURED_USERNAME%"=="" (
-    echo A username is required to continue.
-    exit /b 1
-  )
-  python -c "import os; from app_config import set_configured_username; set_configured_username(os.environ['CONFIGURED_USERNAME'])"
-)
-
-if not exist "my_beers.csv" (
-  echo No my_beers.csv found yet. Running first-time sync for %CONFIGURED_USERNAME%...
-  python run.py --update
-  exit /b %errorlevel%
-)
-
 python -c "import tkinter" >nul 2>nul
 if %errorlevel%==0 (
   python desktop_launcher.py

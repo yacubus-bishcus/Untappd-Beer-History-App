@@ -2,29 +2,31 @@
 
 This project exports your Untappd beer history with Selenium, saves it to `my_beers.csv`, and opens a Streamlit dashboard for reviewing the results.
 
-Supported Python versions: `3.9`, `3.10`, and `3.12`
+Supported Python versions: `3.9+`
 
 ## Desktop Launcher
 
 Desktop launchers are included for both macOS and Windows:
 
 ```text
-macOS:   start_desktop_app.command
+macOS:   Untappd Beer History.app
 Windows: start_desktop_app.bat
 ```
 
-That launcher will:
+The packaged desktop experience works like this:
 
 1. Create `.venv` if needed
 2. Install dependencies
 3. Ask for the user's Untappd username on first launch and save it locally
-4. Run `python run.py --update` automatically the first time so the user gets data right away
-5. Open a small desktop control window on later launches
+4. Run the first sync automatically when no `my_beers.csv` exists yet
+5. Open a desktop control window for later refreshes and dashboard access
 6. Let the user refresh beer data or open the dashboard without using Terminal or Command Prompt
 
-If Python is missing, older than `3.9`, or the local Python build does not include `tkinter`, the launcher will prompt the user to open the official Python download page. If `tkinter` is unavailable, it will also fall back to the browser-based Streamlit app instead of the desktop control window.
+On macOS, the main launcher is now a native Cocoa window built with `PyObjC`, packaged inside a real `.app` bundle for Finder. The existing `start_desktop_app.command` is still included as a fallback for development or troubleshooting.
 
-Note: `.command` and `.bat` launchers are desktop-friendly, but they are still script launchers rather than true native installed apps. To make this look like a normal Mac app in Finder or a normal Windows app in Explorer, the next packaging step would be a real `.app` bundle for macOS and a real `.exe` or installer for Windows.
+If Python is missing or older than `3.9`, the launchers prompt the user to open the official Python download page. If the macOS Python build does not include the Cocoa bridge, the app falls back to the browser-based Streamlit dashboard instead of crashing. Windows continues to use the existing Python desktop launcher flow.
+
+Note: the macOS bundle is a native `.app`, but it still runs the Python project under the hood. Windows is still distributed as a script launcher rather than a fully packaged `.exe`.
 
 ## What `python run.py` Does
 
@@ -32,16 +34,16 @@ Running `python run.py` from `apps/untapped_data` will:
 
 1. If `my_beers.csv` already exists, skip Untappd and open the Streamlit dashboard immediately.
 2. If you pass `--update`, launch Chrome with remote debugging enabled.
-3. Open `https://untappd.com/user/jb2019/beers`.
+3. Open `https://untappd.com/user/<configured-username>/beers`.
 4. Wait for you to finish logging in manually if needed.
 5. Click `Show More` until all beers are loaded.
 6. Save the export to `my_beers.csv`.
-7. Use the existing row count in `my_beers.csv` as the default backstop total if that file already exists.
+7. Optionally honor `--backstop-total` if you pass one during a refresh.
 8. Open the Streamlit dashboard.
 
 Defaults:
 
-- Username: `jb2019`
+- Username: value saved in `app_config.json`
 - Debugger address: `127.0.0.1:9222`
 - Output file: `my_beers.csv`
 
@@ -63,7 +65,7 @@ python3 run.py --update
 
 ## Shareable Desktop Bundle
 
-To create a simple zip you can share with macOS or Windows desktop users:
+To create a shareable desktop bundle:
 
 ```bash
 cd /Users/jacobbickus/Python_Files/apps/untapped_data
@@ -78,8 +80,8 @@ dist/UntappdBeerHistory-desktop.zip
 
 The recipient can unzip it and then:
 
-- on macOS, double-click `start_desktop_app.command`
-- on Windows, double-click `start_desktop_app.bat`
+- on macOS, open `Untappd Beer History.app`
+- on Windows, open `Windows/start_desktop_app.bat`
 
 ## Commands
 
@@ -121,7 +123,7 @@ The beer export is saved with these columns:
 - `selenium-fetch-beers` clicks the page's `Show More` control until it reaches the backstop total or no more items load.
 - During export, Selenium now visits each unique producer page once and tries to extract the producer's city/state into `Location`.
 - Producer locations are cached locally in `producer_location_cache.json`
-- If `my_beers.csv` already exists, its current row count becomes the default backstop total unless you pass `--backstop-total`.
+- `selenium-fetch-beers` uses the current row count in the output CSV as a default backstop only when you run that command directly without an explicit `--backstop-total`.
 - `python3 run.py` opens Streamlit immediately when `my_beers.csv` already exists. Pass `--update` to refresh from Untappd first.
 - The Streamlit app reads `my_beers.csv` by default.
 - Streamlit builds a global country map directly from the `Location` values in `my_beers.csv`.

@@ -90,7 +90,7 @@ def perform_beer_fetch_workflow(
         print(f"Attaching Selenium to Chrome at {debugger_address}...")
         driver = selenium_start_manual_login(
             browser="chrome",
-            headless=False,
+            headless=True,
             attach_debugger=debugger_address,
         )
         selenium_wait_for_manual_login(driver, timeout=300)
@@ -268,7 +268,7 @@ def handle_selenium_fetch_beers(args):
         print(f"Attaching to Chrome debugger at {args.attach_debugger}...")
         driver = selenium_start_manual_login(
             browser="chrome",
-            headless=False,
+            headless=True,
             attach_debugger=args.attach_debugger,
         )
         selenium_wait_for_manual_login(driver, timeout=args.timeout)

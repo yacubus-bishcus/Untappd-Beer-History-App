@@ -395,7 +395,8 @@ def fetch_beers(
     df = pd.DataFrame(beers)
     for date_col in ("first_checkin", "recent_checkin"):
         if date_col in df.columns:
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df[date_col] = pd.to_datetime(df[date_col], format="%m/%d/%y", errors="coerce")
+
 
     df = enrich_producer_locations(driver, df)
 
@@ -990,7 +991,7 @@ def fetch_checkins(driver: webdriver.Remote, username: str) -> pd.DataFrame:
         raise ValueError("No check-ins found for this user")
     
     df = pd.DataFrame(checkins)
-    df["checkin_date"] = pd.to_datetime(df["checkin_date"], errors="coerce")
+    df["checkin_date"] = pd.to_datetime(df["checkin_date"], format="%m/%d/%y", errors="coerce")
     return df.sort_values("checkin_date", ascending=False)
 
 
