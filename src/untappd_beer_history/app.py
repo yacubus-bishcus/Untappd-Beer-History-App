@@ -1,10 +1,10 @@
 import asyncio
 import os
 import socket
-import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +19,8 @@ from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
 
 from untappd_beer_history import __version__
+
+STREAMLIT_STARTUP_TIMEOUT = float(os.environ.get("UNTAPPD_STREAMLIT_STARTUP_TIMEOUT", "60"))
 
 
 def default_runtime_data_dir() -> Path:
@@ -206,21 +208,28 @@ class UntappdBeerHistoryApp(toga.App):
             sock.bind(("127.0.0.1", 0))
             return sock.getsockname()[1]
 
-    def _wait_for_streamlit_ready(self, timeout: float = 20.0) -> bool:
+    def _wait_for_streamlit_ready(self, timeout: float = STREAMLIT_STARTUP_TIMEOUT) -> bool:
         if self.streamlit_port is None:
             return False
 
         deadline = time.time() + timeout
-        health_url = f"http://127.0.0.1:{self.streamlit_port}/_stcore/health"
+        urls_to_check = [
+            f"http://127.0.0.1:{self.streamlit_port}/_stcore/health",
+            f"http://127.0.0.1:{self.streamlit_port}/",
+        ]
         while time.time() < deadline:
             if self.streamlit_error is not None:
                 return False
-            try:
-                with urlopen(health_url, timeout=1.0) as response:
-                    if 200 <= getattr(response, "status", 200) < 500:
-                        return True
-            except Exception:
-                time.sleep(0.25)
+            if self.streamlit_thread is not None and not self.streamlit_thread.is_alive():
+                return False
+            for url in urls_to_check:
+                try:
+                    with urlopen(url, timeout=1.0) as response:
+                        if 200 <= getattr(response, "status", 200) < 500:
+                            return True
+                except Exception:
+                    continue
+            time.sleep(0.25)
         return False
 
     def _ensure_streamlit_server(self):
@@ -234,6 +243,13 @@ class UntappdBeerHistoryApp(toga.App):
         self.streamlit_port = self._choose_streamlit_port()
         self.streamlit_ready_event.clear()
         self.streamlit_error = None
+        self.manager.events.put(
+            (
+                "log",
+                f"\nStarting Streamlit on http://127.0.0.1:{self.streamlit_port} "
+                f"(timeout {STREAMLIT_STARTUP_TIMEOUT:.0f}s)...\n",
+            )
+        )
 
         def streamlit_worker():
             try:
@@ -248,17 +264,22 @@ class UntappdBeerHistoryApp(toga.App):
                         "server.port": self.streamlit_port,
                     },
                 )
-            except Exception as exc:
-                self.streamlit_error = str(exc)
-                self.manager.events.put(("log", f"\nStreamlit startup failed: {exc}\n"))
+            except BaseException as exc:
+                self.streamlit_error = "".join(
+                    traceback.format_exception(type(exc), exc, exc.__traceback__)
+                ).strip()
+                self.manager.events.put(("log", f"\nStreamlit startup failed:\n{self.streamlit_error}\n"))
                 raise
 
         self.streamlit_thread = threading.Thread(target=streamlit_worker, daemon=True)
         self.streamlit_thread.start()
         if not self._wait_for_streamlit_ready():
             if self.streamlit_error is not None:
-                raise RuntimeError(f"Streamlit failed to start: {self.streamlit_error}")
-            raise RuntimeError("Streamlit did not become ready in time.")
+                raise RuntimeError(f"Streamlit failed to start:\n{self.streamlit_error}")
+            raise RuntimeError(
+                "Streamlit did not become ready in time. "
+                f"Waited {STREAMLIT_STARTUP_TIMEOUT:.0f}s for http://127.0.0.1:{self.streamlit_port}."
+            )
 
     def _open_dashboard_in_browser(self):
         self._ensure_streamlit_server()
