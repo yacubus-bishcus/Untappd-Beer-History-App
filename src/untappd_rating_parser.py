@@ -127,6 +127,64 @@ def _extract_checkin_rating(item) -> Optional[float]:
     return _rating_from_class_tokens(item)
 
 
+def _extract_personal_rating_from_beer_page(soup) -> Optional[float]:
+    """Extract the logged-in user's rating from an individual beer detail page."""
+    for label in ("your rating", "you rated"):
+        rating = _extract_labeled_rating(soup, label)
+        if rating is not None:
+            return rating
+
+    page_text = " ".join(soup.stripped_strings)
+    for pattern in (
+        r"Your\s+Rating.{0,100}?([0-5](?:\.\d{1,2})?)",
+        r"You\s+Rated.{0,100}?([0-5](?:\.\d{1,2})?)",
+        r"Rated\s+this\s+beer.{0,100}?([0-5](?:\.\d{1,2})?)",
+    ):
+        match = re.search(pattern, page_text, flags=re.I | re.S)
+        if match:
+            rating = _rating_float(match.group(1))
+            if rating is not None:
+                return rating
+
+    for text in _attribute_texts(soup):
+        if not re.search(r"your|you|user|my|personal", text, flags=re.I):
+            continue
+        rating = _rating_float(text)
+        if rating is not None and re.search(r"rating|rated|star|score", text, flags=re.I):
+            return rating
+
+    # Carefully inspect scripts for user-specific rating keys only. Avoid generic
+    # rating fields because those are often global beer ratings.
+    user_rating_key = re.compile(
+        r"(?:user|my|personal)[_A-Za-z0-9-]*rating|rating[_A-Za-z0-9-]*(?:user|my|personal)",
+        flags=re.I,
+    )
+    for script in soup.find_all("script"):
+        raw = script.string or script.get_text() or ""
+        if not raw or not user_rating_key.search(raw):
+            continue
+        for match in re.finditer(
+            r"[\"'](?P<key>[^\"']*(?:user|my|personal)[^\"']*rating[^\"']*|[^\"']*rating[^\"']*(?:user|my|personal)[^\"']*)[\"']\s*[:=]\s*[\"']?(?P<value>[0-5](?:\.\d{1,2})?)[\"']?",
+            raw,
+            flags=re.I,
+        ):
+            rating = _rating_float(match.group("value"))
+            if rating is not None:
+                return rating
+
+    # Last resort: class-token ratings in a node with user/your/my context nearby.
+    for node in soup.find_all(True):
+        local_text = " ".join(node.stripped_strings)
+        class_text = " ".join(str(value) for value in (node.get("class") or []))
+        context = f"{local_text} {class_text}"
+        if not re.search(r"your|you|user|my|personal", context, flags=re.I):
+            continue
+        rating = _rating_from_class_tokens(node)
+        if rating is not None:
+            return rating
+    return None
+
+
 def _is_missing(value) -> bool:
     if value is None:
         return True
@@ -397,6 +455,102 @@ def _collect_checkin_rating_matches_with_selenium(
     return matches
 
 
+def _missing_rating_rows(df, target_keys: set[str]) -> list[dict]:
+    import untapped_selenium
+
+    rows = []
+    seen = set()
+    for _, row in df.iterrows():
+        if not _is_missing(row.get("your_rating")):
+            continue
+        key = untapped_selenium.beer_producer_key(row.get("beer_name"), row.get("brewery_name"))
+        beer_url = row.get("beer_url")
+        if not key or key not in target_keys or not beer_url or key in seen:
+            continue
+        seen.add(key)
+        rows.append({"key": key, "beer_url": beer_url, "beer_name": row.get("beer_name")})
+    return rows
+
+
+def _fetch_beer_page_personal_rating(row: dict, cookies: dict, user_agent: str):
+    import requests
+    from bs4 import BeautifulSoup
+
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": row.get("beer_url") or "https://untappd.com",
+    }
+    response = requests.get(row["beer_url"], headers=headers, cookies=cookies, timeout=15)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    return row["key"], _extract_personal_rating_from_beer_page(soup)
+
+
+def _collect_beer_page_rating_matches_parallel(
+    missing_rows: list[dict],
+    cookies: dict,
+    user_agent: str,
+    stop_requested=None,
+    max_workers: int = 3,
+) -> dict[str, float]:
+    matches = {}
+    if not missing_rows:
+        return matches
+    print(f"Fetching {len(missing_rows):,} beer detail pages for missing personal ratings...")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_row = {
+            executor.submit(_fetch_beer_page_personal_rating, row, cookies, user_agent): row
+            for row in missing_rows
+        }
+        for future in as_completed(future_to_row):
+            _raise_if_stopped(stop_requested)
+            row = future_to_row[future]
+            try:
+                key, rating = future.result()
+                if rating is not None:
+                    matches[key] = rating
+            except Exception as exc:
+                print(
+                    "Warning: Beer detail page rating lookup failed for "
+                    f"{row.get('beer_name') or row.get('beer_url')}: {exc}"
+                )
+    print(f"Beer detail pages recovered {len(matches):,} missing personal ratings.")
+    return matches
+
+
+def _collect_beer_page_rating_matches_with_selenium(
+    driver,
+    missing_rows: list[dict],
+    stop_requested=None,
+) -> dict[str, float]:
+    from bs4 import BeautifulSoup
+    import time
+
+    matches = {}
+    if not missing_rows:
+        return matches
+    print(f"Using Selenium on {len(missing_rows):,} beer detail pages for missing personal ratings...")
+    for idx, row in enumerate(missing_rows, start=1):
+        _raise_if_stopped(stop_requested)
+        try:
+            print(f"Checking beer detail rating {idx}/{len(missing_rows)}: {row.get('beer_name') or row.get('beer_url')}")
+            driver.get(row["beer_url"])
+            time.sleep(0.8)
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+            rating = _extract_personal_rating_from_beer_page(soup)
+            if rating is not None:
+                matches[row["key"]] = rating
+        except Exception as exc:
+            print(
+                "Warning: Selenium beer detail rating lookup failed for "
+                f"{row.get('beer_name') or row.get('beer_url')}: {exc}"
+            )
+    print(f"Selenium beer detail pages recovered {len(matches):,} missing personal ratings.")
+    return matches
+
+
 def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop_requested=None):
     import untapped_selenium
 
@@ -444,8 +598,30 @@ def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop
         )
         rating_matches.update(selenium_matches)
 
+    remaining_keys = missing_keys - set(rating_matches)
+    if remaining_keys:
+        missing_rows = _missing_rating_rows(df, remaining_keys)
+        beer_page_matches = _collect_beer_page_rating_matches_parallel(
+            missing_rows,
+            cookies=cookies,
+            user_agent=user_agent,
+            stop_requested=stop_requested,
+            max_workers=3,
+        )
+        rating_matches.update(beer_page_matches)
+
+    remaining_keys = missing_keys - set(rating_matches)
+    if remaining_keys:
+        missing_rows = _missing_rating_rows(df, remaining_keys)
+        selenium_beer_page_matches = _collect_beer_page_rating_matches_with_selenium(
+            driver,
+            missing_rows,
+            stop_requested=stop_requested,
+        )
+        rating_matches.update(selenium_beer_page_matches)
+
     if not rating_matches:
-        print("Warning: Could not recover any missing personal ratings from check-ins.")
+        print("Warning: Could not recover any missing personal ratings from check-ins or beer detail pages.")
         return df
 
     enriched = df.copy()
@@ -459,7 +635,7 @@ def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop
             enriched.at[idx, "your_rating"] = rating
             filled_count += 1
 
-    print(f"Recovered personal ratings for {filled_count:,} beer rows from check-ins.")
+    print(f"Recovered personal ratings for {filled_count:,} beer rows.")
     return enriched
 
 
