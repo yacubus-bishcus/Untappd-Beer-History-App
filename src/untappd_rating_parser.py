@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
 
@@ -44,6 +45,25 @@ def _attribute_texts(item) -> list[str]:
     return values
 
 
+def _rating_from_class_tokens(item) -> Optional[float]:
+    """Extract Untappd-style CSS ratings such as r45 -> 4.5 or r4 -> 4.0."""
+    for node in item.find_all(True):
+        class_values = node.get("class") or []
+        class_text = " ".join(str(value) for value in class_values)
+        if not re.search(r"rating|star|caps", class_text, flags=re.I):
+            continue
+        for token in class_values:
+            match = re.fullmatch(r"r(\d{1,2})", str(token).strip(), flags=re.I)
+            if not match:
+                continue
+            raw = int(match.group(1))
+            if 0 <= raw <= 5:
+                return float(raw)
+            if 0 <= raw <= 50:
+                return raw / 10.0
+    return None
+
+
 def _extract_labeled_rating(item, label: str) -> Optional[float]:
     texts = []
     full_text = " ".join(item.stripped_strings)
@@ -83,25 +103,301 @@ def _extract_labeled_rating(item, label: str) -> Optional[float]:
     return None
 
 
-def patch_untappd_selenium_rating_parser():
-    """Patch untapped_selenium.parse_beer_item with more defensive rating extraction."""
+def _extract_checkin_rating(item) -> Optional[float]:
+    """Extract the user's rating from a check-in feed item."""
+    for label in ("your rating", "you rated", "rating"):
+        rating = _extract_labeled_rating(item, label)
+        if rating is not None:
+            return rating
+
+    for text in _attribute_texts(item):
+        rating = _rating_float(text)
+        if rating is not None and re.search(r"rating|rated|star", text, flags=re.I):
+            return rating
+
+    return _rating_from_class_tokens(item)
+
+
+def _is_missing(value) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(value != value)
+    except Exception:
+        return False
+
+
+def _raise_if_stopped(stop_requested):
+    if stop_requested and stop_requested():
+        from app_runtime import TaskCancelled
+
+        raise TaskCancelled()
+
+
+def _fetch_checkin_page_for_ratings(username: str, offset: int, cookies: dict, user_agent: str):
+    import requests
+    from bs4 import BeautifulSoup
     import untapped_selenium
 
-    original_parse = untapped_selenium.parse_beer_item
-    if getattr(original_parse, "_rating_parser_patched", False):
-        return
+    url = untapped_selenium.build_checkin_page_url(username, offset)
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Referer": f"{untapped_selenium.UNTAPPD_BASE}/user/{username}",
+    }
+    response = requests.get(url, headers=headers, cookies=cookies, timeout=15)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")
+    return [
+        parsed
+        for item in untapped_selenium.find_checkin_items(soup)
+        if (parsed := untapped_selenium.parse_checkin_item(item))
+    ]
 
-    def parse_beer_item_with_robust_ratings(item):
-        parsed = original_parse(item)
-        if not parsed:
+
+def _collect_checkin_rating_matches_parallel(
+    username: str,
+    target_keys: set[str],
+    cookies: dict,
+    user_agent: str,
+    stop_requested=None,
+    max_checkins: Optional[int] = None,
+    max_pages: int = 80,
+    max_workers: int = 4,
+    batch_size: int = 8,
+) -> dict[str, float]:
+    import untapped_selenium
+
+    matches = {}
+    effective_max_pages = max_pages
+    if max_checkins is not None:
+        effective_max_pages = max(1, min(max_pages, (max_checkins + 24) // 25))
+    offsets = list(range(0, effective_max_pages * 25, 25))
+    scanned_checkins = 0
+
+    for batch_start in range(0, len(offsets), batch_size):
+        _raise_if_stopped(stop_requested)
+        if target_keys and target_keys.issubset(matches):
+            break
+        if max_checkins is not None and scanned_checkins >= max_checkins:
+            break
+
+        batch_offsets = offsets[batch_start: batch_start + batch_size]
+        print(
+            "Checking check-in ratings pages "
+            f"{batch_start + 1}-{batch_start + len(batch_offsets)} in parallel..."
+        )
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_offset = {
+                executor.submit(
+                    _fetch_checkin_page_for_ratings,
+                    username,
+                    offset,
+                    cookies,
+                    user_agent,
+                ): offset
+                for offset in batch_offsets
+            }
+            for future in as_completed(future_to_offset):
+                offset = future_to_offset[future]
+                try:
+                    results[offset] = future.result()
+                except Exception as exc:
+                    print(f"Warning: Check-in rating page offset {offset} failed over HTTP: {exc}")
+                    results[offset] = []
+
+        saw_items = False
+        batch_had_short_page = False
+        for offset in sorted(results):
+            items = results[offset]
+            if items:
+                saw_items = True
+            if len(items) < 10:
+                batch_had_short_page = True
+            scanned_checkins += len(items)
+            for parsed in items:
+                key = untapped_selenium.beer_producer_key(
+                    parsed.get("beer_name"),
+                    parsed.get("brewery_name"),
+                )
+                rating = parsed.get("rating")
+                if key in target_keys and rating is not None and key not in matches:
+                    matches[key] = rating
+
+        if not saw_items or batch_had_short_page:
+            break
+
+    print(f"Parallel check-in scan recovered {len(matches):,} missing personal ratings.")
+    return matches
+
+
+def _collect_checkin_rating_matches_with_selenium(
+    driver,
+    username: str,
+    target_keys: set[str],
+    stop_requested=None,
+    max_checkins: Optional[int] = None,
+    max_pages: int = 80,
+) -> dict[str, float]:
+    from bs4 import BeautifulSoup
+    import untapped_selenium
+
+    matches = {}
+    scanned_checkins = 0
+    next_url = untapped_selenium.build_checkin_page_url(username)
+    for page_num in range(1, max_pages + 1):
+        _raise_if_stopped(stop_requested)
+        if target_keys and target_keys.issubset(matches):
+            break
+        if max_checkins is not None and scanned_checkins >= max_checkins:
+            break
+
+        print(f"Checking check-in ratings page {page_num} with Selenium...")
+        if page_num == 1:
+            driver.get(next_url)
+            import time
+
+            time.sleep(1.2)
+            soup = BeautifulSoup(driver.page_source, "html.parser")
+        else:
+            soup = untapped_selenium.fetch_more_feed_page(driver, username, next_url)
+
+        checkin_items = untapped_selenium.find_checkin_items(soup)
+        if not checkin_items:
+            break
+        scanned_checkins += len(checkin_items)
+        for item in checkin_items:
+            parsed = untapped_selenium.parse_checkin_item(item)
+            if not parsed:
+                continue
+            key = untapped_selenium.beer_producer_key(parsed.get("beer_name"), parsed.get("brewery_name"))
+            rating = parsed.get("rating")
+            if key in target_keys and rating is not None and key not in matches:
+                matches[key] = rating
+        last_checkin_id = untapped_selenium.find_last_checkin_id(checkin_items)
+        if not last_checkin_id:
+            break
+        next_url = untapped_selenium.build_more_feed_url(username, last_checkin_id)
+    return matches
+
+
+def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop_requested=None):
+    import untapped_selenium
+
+    if df.empty or "your_rating" not in df.columns:
+        return df
+
+    missing_keys = set()
+    for _, row in df.iterrows():
+        if not _is_missing(row.get("your_rating")):
+            continue
+        key = untapped_selenium.beer_producer_key(row.get("beer_name"), row.get("brewery_name"))
+        if key:
+            missing_keys.add(key)
+
+    if not missing_keys:
+        return df
+
+    print(f"Recovering missing personal ratings from check-ins ({len(missing_keys)} beers missing)...")
+    cookies = {cookie["name"]: cookie["value"] for cookie in driver.get_cookies()}
+    user_agent = driver.execute_script("return navigator.userAgent") or (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
+    )
+    rating_matches = _collect_checkin_rating_matches_parallel(
+        username,
+        missing_keys,
+        cookies=cookies,
+        user_agent=user_agent,
+        stop_requested=stop_requested,
+        max_checkins=max(len(df) * 2, len(df)),
+        max_workers=4,
+    )
+
+    remaining_keys = missing_keys - set(rating_matches)
+    if remaining_keys:
+        print(
+            "Parallel check-in scan did not find all personal ratings; "
+            f"using Selenium for {len(remaining_keys)} remaining beers..."
+        )
+        selenium_matches = _collect_checkin_rating_matches_with_selenium(
+            driver,
+            username,
+            remaining_keys,
+            stop_requested=stop_requested,
+            max_checkins=max(len(df) * 2, len(df)),
+        )
+        rating_matches.update(selenium_matches)
+
+    if not rating_matches:
+        print("Warning: Could not recover any missing personal ratings from check-ins.")
+        return df
+
+    enriched = df.copy()
+    filled_count = 0
+    for idx, row in enriched.iterrows():
+        if not _is_missing(row.get("your_rating")):
+            continue
+        key = untapped_selenium.beer_producer_key(row.get("beer_name"), row.get("brewery_name"))
+        rating = rating_matches.get(key)
+        if rating is not None:
+            enriched.at[idx, "your_rating"] = rating
+            filled_count += 1
+
+    print(f"Recovered personal ratings for {filled_count:,} beer rows from check-ins.")
+    return enriched
+
+
+def patch_untappd_selenium_rating_parser():
+    """Patch Untappd Selenium parsing with more defensive rating extraction and recovery."""
+    import untapped_selenium
+
+    original_parse_beer = untapped_selenium.parse_beer_item
+    if not getattr(original_parse_beer, "_rating_parser_patched", False):
+        def parse_beer_item_with_robust_ratings(item):
+            parsed = original_parse_beer(item)
+            if not parsed:
+                return parsed
+
+            if parsed.get("your_rating") is None:
+                parsed["your_rating"] = _extract_labeled_rating(item, "your rating")
+            if parsed.get("global_rating") is None:
+                parsed["global_rating"] = _extract_labeled_rating(item, "global rating")
+
             return parsed
 
-        if parsed.get("your_rating") is None:
-            parsed["your_rating"] = _extract_labeled_rating(item, "your rating")
-        if parsed.get("global_rating") is None:
-            parsed["global_rating"] = _extract_labeled_rating(item, "global rating")
+        parse_beer_item_with_robust_ratings._rating_parser_patched = True
+        untapped_selenium.parse_beer_item = parse_beer_item_with_robust_ratings
 
-        return parsed
+    original_parse_checkin = untapped_selenium.parse_checkin_item
+    if not getattr(original_parse_checkin, "_rating_parser_patched", False):
+        def parse_checkin_item_with_robust_rating(item):
+            parsed = original_parse_checkin(item)
+            if not parsed:
+                return parsed
+            if parsed.get("rating") is None:
+                parsed["rating"] = _extract_checkin_rating(item)
+            return parsed
 
-    parse_beer_item_with_robust_ratings._rating_parser_patched = True
-    untapped_selenium.parse_beer_item = parse_beer_item_with_robust_ratings
+        parse_checkin_item_with_robust_rating._rating_parser_patched = True
+        untapped_selenium.parse_checkin_item = parse_checkin_item_with_robust_rating
+
+    original_enrich_consumed_locations = untapped_selenium.enrich_consumed_locations
+    if not getattr(original_enrich_consumed_locations, "_rating_recovery_patched", False):
+        def enrich_consumed_locations_with_rating_recovery(driver, username, df, stop_requested=None):
+            rating_enriched = _fill_missing_personal_ratings_from_checkins(
+                driver,
+                username,
+                df,
+                stop_requested=stop_requested,
+            )
+            return original_enrich_consumed_locations(
+                driver,
+                username,
+                rating_enriched,
+                stop_requested=stop_requested,
+            )
+
+        enrich_consumed_locations_with_rating_recovery._rating_recovery_patched = True
+        untapped_selenium.enrich_consumed_locations = enrich_consumed_locations_with_rating_recovery
