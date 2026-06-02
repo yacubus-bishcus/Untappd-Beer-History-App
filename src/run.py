@@ -8,7 +8,7 @@ from typing import Callable, Optional
 from app_config import get_configured_username
 from app_runtime import TaskCancelled
 from paths import DEFAULT_OUTPUT_PATH
-from untapped_rating_parser import patch_untappd_selenium_rating_parser
+from untappd_rating_parser import patch_untappd_selenium_rating_parser
 from untapped_selenium import (
     fetch_beers as selenium_fetch_beers,
     is_debugger_ready,
