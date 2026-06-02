@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "untappd-beer-history"
-version = "0.1.1"
-description = "Native desktop exporter and dashboard for Untappd beer history."
+version = "0.2.1"
+description = "Native desktop app for exporting and analyzing Untappd beer history."
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
 authors = [
@@ -15,34 +15,31 @@ authors = [
 [tool.briefcase]
 project_name = "Untappd Beer History"
 bundle = "com.yacubusbishcus"
-version = "0.1.1"
+version = "0.2.1"
 url = "https://github.com/yacubus-bishcus/untapped_data"
 author = "Jacob Bickus"
 
 [tool.briefcase.app.untappd_beer_history]
 formal_name = "Untappd Beer History"
-description = "Export Untappd beer history and open a local dashboard."
-long_description = "A native desktop app for exporting Untappd beer history with Selenium and reviewing the results in a local Streamlit dashboard."
+description = "Export and analyze Untappd beer history in a native desktop app."
+long_description = "A native desktop app for exporting Untappd beer history with Selenium and generating local statistics, including a consumed-location heatmap."
 sources = [
   "src/untappd_beer_history",
+  "src/app_runtime.py",
   "src/app_config.py",
-  "src/desktop_launcher.py",
   "src/paths.py",
   "src/run.py",
-  "src/streamlit_app.py",
-  "src/untapped.py",
   "src/untapped_selenium.py",
 ]
 requires = [
   "urllib3<2",
-  "streamlit",
-  "plotly",
-  "streamlit-plotly-events",
   "pandas",
+  "plotly",
   "requests",
   "beautifulsoup4",
   "selenium",
   "webdriver-manager",
+  "toga",
 ]
 
 [tool.briefcase.app.untappd_beer_history.macOS]

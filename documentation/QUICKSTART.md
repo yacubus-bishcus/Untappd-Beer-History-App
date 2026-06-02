@@ -4,17 +4,39 @@ Source workflow Python: `3.9+`
 Briefcase packaging Python: `3.12+`
 
 ```bash
-cd /Users/jacobbickus/Python_Files/apps/untapped_data
+cd /Users/jacobbickus/Python_Files/apps/Untappd-Beer-History-App
 source .venv/bin/activate
 python3 src/run.py
 ```
 
 Default behavior:
 
-- If `data/my_beers.csv` already exists, Streamlit opens immediately
+- If `data/my_beers.csv` exists, the native app opens so you can view statistics or refresh data
 - Use `python3 src/run.py --update` to force a fresh Untappd download
-- Exports to `data/my_beers.csv`
-- Opens Streamlit after the export finishes
+- Use `python3 src/run.py --clean-run` to ignore the existing CSV row count/backstop and fetch all visible beer history from scratch
+- The export writes `data/my_beers.csv`
+- The `Statistics` button generates local HTML and opens it in your browser
+
+Useful commands:
+
+```bash
+python3 src/run.py
+python3 src/run.py --update
+python3 src/run.py --clean-run
+python3 src/run.py --clean-run --no-ui
+python3 src/run.py selenium-launch-chrome
+python3 src/run.py selenium-fetch-beers
+python3 src/run.py selenium-fetch-beers --clean-run
+python3 src/run.py selenium-fetch-beers --backstop-total 250
+```
+
+Generated files:
+
+- `data/my_beers.csv`
+- `data/producer_location_cache.json`
+- `data/consumed_location_cache.json`
+- `data/beer_statistics.html`
+- `data/beer_map_fragment.js`
 
 Briefcase packaging:
 
@@ -33,14 +55,3 @@ Best install path for non-developers:
 
 - Download the DMG from `GitHub Releases`
 - Use `Download ZIP` only if you want the source code
-
-Useful commands:
-
-```bash
-python3 src/run.py
-python3 src/run.py --update
-python3 src/run.py selenium-launch-chrome
-python3 src/run.py selenium-fetch-beers
-python3 src/run.py selenium-fetch-beers --backstop-total 250
-python3 src/run.py streamlit
-```

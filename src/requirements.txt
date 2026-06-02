@@ -1,11 +1,8 @@
 urllib3<2
-streamlit
-plotly
-streamlit-plotly-events
 pandas
+plotly
 requests
 beautifulsoup4
 selenium
 webdriver-manager
-pyobjc-core; sys_platform == "darwin"
-pyobjc-framework-Cocoa; sys_platform == "darwin"
+toga

@@ -5,7 +5,6 @@ from pathlib import Path
 SRC_DIR = Path(__file__).resolve().parent
 IS_BUNDLED_APP = SRC_DIR.name == "app" and SRC_DIR.parent.name == "Resources"
 PROJECT_ROOT = SRC_DIR if IS_BUNDLED_APP else SRC_DIR.parent
-STREAMLIT_APP_PATH = SRC_DIR / "streamlit_app.py"
 BUNDLED_PYTHON_PATH = (
     SRC_DIR.parent.parent / "Frameworks" / "Python.framework" / "Python"
     if IS_BUNDLED_APP
