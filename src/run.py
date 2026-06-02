@@ -42,6 +42,13 @@ def open_statistics_ui():
     app.main_loop()
 
 
+def open_statistics_report(output: str):
+    print("Opening browser statistics report...")
+    from cli_statistics import open_statistics_report as open_cli_statistics_report
+
+    return open_cli_statistics_report(output)
+
+
 def count_csv_rows(path: Path) -> int:
     if not path.exists():
         return 0
@@ -166,7 +173,7 @@ Examples:
     parser.add_argument(
         "--no-ui",
         action="store_true",
-        help="Run the default workflow without opening the native app afterward",
+        help="Run the default workflow without opening the native app; open the browser statistics report instead",
     )
     parser.add_argument(
         "--username",
@@ -226,38 +233,12 @@ Examples:
         "selenium-fetch-beers",
         help="Fetch beer history from the Untappd /beers page using Selenium",
     )
-    selenium_fetch_beers_parser.add_argument(
-        "--username",
-        default=DEFAULT_USERNAME,
-        help="Untappd username whose beer history should be downloaded",
-    )
-    selenium_fetch_beers_parser.add_argument(
-        "--output",
-        "-o",
-        default=DEFAULT_OUTPUT,
-        help="Save fetched data to CSV file",
-    )
-    selenium_fetch_beers_parser.add_argument(
-        "--attach-debugger",
-        default=DEFAULT_DEBUGGER_ADDRESS,
-        help="Attach to an existing Chrome instance",
-    )
-    selenium_fetch_beers_parser.add_argument(
-        "--user-data-dir",
-        default=DEFAULT_USER_DATA_DIR,
-        help="Chrome profile directory to use if Chrome needs to be launched automatically",
-    )
-    selenium_fetch_beers_parser.add_argument(
-        "--timeout",
-        type=int,
-        default=300,
-        help="How long to wait (seconds) for you to finish manual login when not attaching to an existing browser",
-    )
-    selenium_fetch_beers_parser.add_argument(
-        "--backstop-total",
-        type=int,
-        help="Expected total beer count; defaults to the current number of rows in the output CSV if it exists",
-    )
+    selenium_fetch_beers_parser.add_argument("--username", default=DEFAULT_USERNAME)
+    selenium_fetch_beers_parser.add_argument("--output", "-o", default=DEFAULT_OUTPUT)
+    selenium_fetch_beers_parser.add_argument("--attach-debugger", default=DEFAULT_DEBUGGER_ADDRESS)
+    selenium_fetch_beers_parser.add_argument("--user-data-dir", default=DEFAULT_USER_DATA_DIR)
+    selenium_fetch_beers_parser.add_argument("--timeout", type=int, default=300)
+    selenium_fetch_beers_parser.add_argument("--backstop-total", type=int)
     selenium_fetch_beers_parser.add_argument(
         "--clean-run",
         action="store_true",
@@ -286,7 +267,7 @@ Examples:
     run_default_parser.add_argument(
         "--no-ui",
         action="store_true",
-        help="Run without opening the native app afterward",
+        help="Run without opening the native app; open the browser statistics report instead",
     )
 
     return parser.parse_args()
@@ -366,7 +347,9 @@ def handle_run_default(args):
     output_path = Path(args.output)
     if output_path.exists() and not args.update and not args.clean_run:
         print(f"Found existing {output_path}. Skipping Untappd download. Use --update to refresh.")
-        if not args.no_ui:
+        if args.no_ui:
+            open_statistics_report(args.output)
+        else:
             open_statistics_ui()
         return
 
@@ -378,7 +361,9 @@ def handle_run_default(args):
         user_data_dir=args.user_data_dir,
         clean_run=args.clean_run,
     )
-    if not args.no_ui:
+    if args.no_ui:
+        open_statistics_report(args.output)
+    else:
         open_statistics_ui()
 
 
