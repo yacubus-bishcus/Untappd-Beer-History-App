@@ -1,15 +1,25 @@
 import html
+import json
 import math
 import threading
 import webbrowser
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+from plotly.utils import PlotlyJSONEncoder
 
 
 PROFILE_SECTION_MARKER = "<h2>Time Window Summary</h2>"
 CONTRARIAN_THRESHOLD = 0.75
+RATING_WINDOWS = [
+    ("Last 7 days", "7d"),
+    ("Last 30 days", "30d"),
+    ("Last 6 months", "6mo"),
+    ("Last 365 days", "365d"),
+    ("Year to Date", "ytd"),
+]
 
 
 def _format_number(value, digits=2):
@@ -28,6 +38,30 @@ def _paragraph(text: str) -> str:
 
 def _empty_chart_message(message: str) -> str:
     return f"<p><em>{html.escape(message)}</em></p>"
+
+
+def _normalize_date_column(df: pd.DataFrame) -> pd.DataFrame:
+    dated = df.copy()
+    if "Recent Date" in dated.columns:
+        dated["Recent Date"] = pd.to_datetime(dated["Recent Date"], errors="coerce")
+    return dated
+
+
+def _window_frame(df: pd.DataFrame, window_key: str, now: datetime) -> pd.DataFrame:
+    if "Recent Date" not in df.columns:
+        return df.iloc[0:0].copy()
+    dated = df[df["Recent Date"].notna()].copy()
+    if window_key == "7d":
+        return dated[dated["Recent Date"] >= now - timedelta(days=7)]
+    if window_key == "30d":
+        return dated[dated["Recent Date"] >= now - timedelta(days=30)]
+    if window_key == "6mo":
+        return dated[dated["Recent Date"] >= now - timedelta(days=183)]
+    if window_key == "365d":
+        return dated[dated["Recent Date"] >= now - timedelta(days=365)]
+    if window_key == "ytd":
+        return dated[dated["Recent Date"] >= pd.Timestamp(datetime(now.year, 1, 1))]
+    return dated
 
 
 def _normalized_style_diversity(style_counts: pd.Series) -> float | None:
@@ -52,7 +86,7 @@ def _normalized_style_diversity(style_counts: pd.Series) -> float | None:
     return (entropy / max_entropy) * 100
 
 
-def _build_rating_distribution_chart(ratings: pd.DataFrame) -> str:
+def _rating_distribution_data(ratings: pd.DataFrame) -> list[dict]:
     distribution = (
         ratings["My Rating"]
         .dropna()
@@ -63,26 +97,15 @@ def _build_rating_distribution_chart(ratings: pd.DataFrame) -> str:
         .reset_index(name="Beer Count")
     )
     if distribution.empty:
-        return _empty_chart_message("No personal rating values are available for the distribution chart.")
-
+        return []
     distribution["My Rating"] = distribution["My Rating"].map(lambda value: f"{value:.2f}")
-    fig = px.bar(
-        distribution,
-        x="My Rating",
-        y="Beer Count",
-        title="Rating Distribution",
-        labels={"My Rating": "Your Rating", "Beer Count": "Beer Count"},
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False)
+    return distribution.to_dict("records")
 
 
-def _build_rating_bias_by_style_chart(ratings: pd.DataFrame) -> tuple[str, str]:
+def _rating_bias_by_style_data(ratings: pd.DataFrame) -> tuple[list[dict], str]:
     style_ratings = ratings.dropna(subset=["Beer Type", "My Rating", "Global Rating"]).copy()
     if style_ratings.empty:
-        return (
-            _empty_chart_message("Not enough style and rating data is available for rating bias by style."),
-            "Rating bias by style groups beers by Beer Type and averages My Rating minus Global Rating.",
-        )
+        return [], "Not enough style and rating data is available for rating bias by style."
 
     grouped = (
         style_ratings.assign(rating_bias=style_ratings["My Rating"] - style_ratings["Global Rating"])
@@ -100,29 +123,36 @@ def _build_rating_bias_by_style_chart(ratings: pd.DataFrame) -> tuple[str, str]:
 
     filtered = filtered.assign(abs_bias=filtered["avg_bias"].abs())
     filtered = filtered.sort_values("abs_bias", ascending=False).head(20).sort_values("avg_bias")
-    fig = px.bar(
-        filtered,
-        x="avg_bias",
-        y="Beer Type",
-        orientation="h",
-        title="Rating Bias by Style",
-        labels={"avg_bias": "Avg Bias: My Rating - Global Rating", "Beer Type": "Beer Style"},
-        hover_data={"beer_count": True, "abs_bias": False},
-    )
-    explanation = (
-        "Rating bias by style shows where your taste differs from the crowd. "
-        "Positive values mean you rate that style higher than the global average; negative values mean you rate it lower. "
-        + min_count_note
-    )
-    return fig.to_html(full_html=False, include_plotlyjs=False), explanation
+    return filtered.to_dict("records"), min_count_note
+
+
+def _build_rating_window_payload(ratings: pd.DataFrame) -> dict:
+    now = datetime.now()
+    dated = _normalize_date_column(ratings)
+    payload = {}
+    for label, key in RATING_WINDOWS:
+        frame = _window_frame(dated, key, now)
+        complete = frame.dropna(subset=["My Rating", "Global Rating"]).copy()
+        distribution_rows = _rating_distribution_data(complete)
+        bias_rows, min_count_note = _rating_bias_by_style_data(complete)
+        payload[key] = {
+            "label": label,
+            "distribution": distribution_rows,
+            "bias_by_style": bias_rows,
+            "distribution_empty": "No personal ratings are available for this time window.",
+            "bias_empty": "Not enough personal/global rating and style data is available for this time window.",
+            "bias_note": min_count_note,
+            "rated_rows": int(len(complete)),
+            "total_rows": int(len(frame)),
+        }
+    return payload
 
 
 def _build_drinking_timeline_chart(df: pd.DataFrame) -> str:
     if "Recent Date" not in df.columns:
         return _empty_chart_message("Recent Date is missing, so the drinking activity timeline cannot be built.")
 
-    timeline = df.copy()
-    timeline["Recent Date"] = pd.to_datetime(timeline["Recent Date"], errors="coerce")
+    timeline = _normalize_date_column(df)
     timeline = timeline.dropna(subset=["Recent Date"])
     if timeline.empty:
         return _empty_chart_message("No valid Recent Date values are available for the drinking activity timeline.")
@@ -151,8 +181,7 @@ def _build_style_diversity_chart(df: pd.DataFrame) -> tuple[str, str, str]:
     if "Recent Date" not in df.columns:
         return overall_text, _empty_chart_message("Recent Date is missing, so year-by-year style diversity cannot be charted."), ""
 
-    dated = df.copy()
-    dated["Recent Date"] = pd.to_datetime(dated["Recent Date"], errors="coerce")
+    dated = _normalize_date_column(df)
     dated["Beer Type"] = dated["Beer Type"].fillna("").astype(str).str.strip()
     dated = dated[dated["Recent Date"].notna() & dated["Beer Type"].ne("")]
     if dated.empty:
@@ -184,6 +213,107 @@ def _build_style_diversity_chart(df: pd.DataFrame) -> tuple[str, str, str]:
         hover_data={"Beer Count": True, "Unique Styles": True},
     )
     return overall_text, fig.to_html(full_html=False, include_plotlyjs=False), ""
+
+
+def _interactive_rating_charts_html(ratings: pd.DataFrame) -> str:
+    payload = _build_rating_window_payload(ratings)
+    payload_json = json.dumps(payload, cls=PlotlyJSONEncoder)
+    options = "".join(
+        f"<option value='{key}'>{html.escape(label)}</option>" for label, key in RATING_WINDOWS
+    )
+    return f"""
+<div class='chart-container'><h3>Rating Distribution</h3>
+{_paragraph('Rating distribution shows your personal grading curve: how many beers you gave each rating value. Use the menu to evaluate recent periods or year-to-date behavior.')}
+<label for='rating-distribution-window'>Evaluation window:</label>
+<select id='rating-distribution-window'>{options}</select>
+<div id='rating-distribution-chart' style='width:100%; min-height:420px;'></div>
+<div id='rating-distribution-note'></div>
+</div>
+<div class='chart-container'><h3>Rating Bias by Style</h3>
+{_paragraph('Rating bias by style shows where your taste differs from the crowd. Positive values mean you rate that style higher than the global average; negative values mean you rate it lower.')}
+<label for='rating-bias-window'>Evaluation window:</label>
+<select id='rating-bias-window'>{options}</select>
+<div id='rating-bias-chart' style='width:100%; min-height:520px;'></div>
+<div id='rating-bias-note'></div>
+</div>
+<script>
+const RATING_WINDOW_DATA = {payload_json};
+function renderEmptyChart(containerId, message) {{
+  const container = document.getElementById(containerId);
+  if (!container) return;
+  container.innerHTML = `<p><em>${{message}}</em></p>`;
+}}
+function renderRatingDistribution(windowKey) {{
+  const data = RATING_WINDOW_DATA[windowKey];
+  const note = document.getElementById('rating-distribution-note');
+  if (!data || !data.distribution || data.distribution.length === 0) {{
+    renderEmptyChart('rating-distribution-chart', data ? data.distribution_empty : 'No data available.');
+    if (note) note.innerHTML = '';
+    return;
+  }}
+  const trace = {{
+    type: 'bar',
+    x: data.distribution.map(row => row['My Rating']),
+    y: data.distribution.map(row => row['Beer Count']),
+    hovertemplate: 'Rating %{{x}}<br>Beer Count: %{{y}}<extra></extra>'
+  }};
+  Plotly.newPlot('rating-distribution-chart', [trace], {{
+    title: `Rating Distribution — ${{data.label}}`,
+    xaxis: {{title: 'Your Rating'}},
+    yaxis: {{title: 'Beer Count'}},
+    margin: {{l: 60, r: 30, t: 60, b: 70}}
+  }}, {{responsive: true}});
+  if (note) note.innerHTML = `<p><strong>Rows used:</strong> ${{data.rated_rows}} rated rows out of ${{data.total_rows}} rows in this window.</p>`;
+}}
+function renderRatingBias(windowKey) {{
+  const data = RATING_WINDOW_DATA[windowKey];
+  const note = document.getElementById('rating-bias-note');
+  if (!data || !data.bias_by_style || data.bias_by_style.length === 0) {{
+    renderEmptyChart('rating-bias-chart', data ? data.bias_empty : 'No data available.');
+    if (note) note.innerHTML = '';
+    return;
+  }}
+  const rows = data.bias_by_style;
+  const trace = {{
+    type: 'bar',
+    orientation: 'h',
+    x: rows.map(row => row.avg_bias),
+    y: rows.map(row => row['Beer Type']),
+    customdata: rows.map(row => row.beer_count),
+    hovertemplate: 'Style: %{{y}}<br>Avg Bias: %{{x:.2f}}<br>Beer Count: %{{customdata}}<extra></extra>'
+  }};
+  Plotly.newPlot('rating-bias-chart', [trace], {{
+    title: `Rating Bias by Style — ${{data.label}}`,
+    xaxis: {{title: 'Avg Bias: My Rating - Global Rating'}},
+    yaxis: {{title: 'Beer Style', automargin: true}},
+    margin: {{l: 190, r: 30, t: 60, b: 70}}
+  }}, {{responsive: true}});
+  if (note) note.innerHTML = `<p>${{data.bias_note}} <strong>Rows used:</strong> ${{data.rated_rows}} rated rows out of ${{data.total_rows}} rows in this window.</p>`;
+}}
+function syncRatingWindows(sourceId, targetId, value) {{
+  const target = document.getElementById(targetId);
+  if (target && target.value !== value) target.value = value;
+}}
+const distributionSelect = document.getElementById('rating-distribution-window');
+const biasSelect = document.getElementById('rating-bias-window');
+if (distributionSelect) {{
+  distributionSelect.addEventListener('change', function() {{
+    syncRatingWindows('rating-distribution-window', 'rating-bias-window', this.value);
+    renderRatingDistribution(this.value);
+    renderRatingBias(this.value);
+  }});
+}}
+if (biasSelect) {{
+  biasSelect.addEventListener('change', function() {{
+    syncRatingWindows('rating-bias-window', 'rating-distribution-window', this.value);
+    renderRatingDistribution(this.value);
+    renderRatingBias(this.value);
+  }});
+}}
+renderRatingDistribution('7d');
+renderRatingBias('7d');
+</script>
+"""
 
 
 def build_rating_profile_section(df: pd.DataFrame) -> str:
@@ -220,9 +350,8 @@ def build_rating_profile_section(df: pd.DataFrame) -> str:
     else:
         bias_read = "Your average rating bias is neutral against the Untappd crowd."
 
-    bias_chart, bias_explanation = _build_rating_bias_by_style_chart(complete)
-    distribution_chart = _build_rating_distribution_chart(complete)
     timeline_chart = _build_drinking_timeline_chart(ratings)
+    interactive_rating_charts = _interactive_rating_charts_html(ratings)
 
     cards = [
         _metric_card("Avg Per-Beer Rating Gap", _format_number(avg_gap)),
@@ -250,14 +379,7 @@ def build_rating_profile_section(df: pd.DataFrame) -> str:
         _paragraph(
             "Style Diversity Index uses normalized Shannon diversity on a 0-100 scale. It rises when you drink across more beer styles and when those styles are more evenly represented."
         ),
-        "<div class='chart-container'><h3>Rating Bias by Style</h3>",
-        _paragraph(bias_explanation),
-        bias_chart,
-        "</div>",
-        "<div class='chart-container'><h3>Rating Distribution</h3>",
-        _paragraph("Rating distribution shows your personal grading curve: how many beers you gave each rating value."),
-        distribution_chart,
-        "</div>",
+        interactive_rating_charts,
         "<div class='chart-container'><h3>Timeline of Drinking Activity</h3>",
         _paragraph("The drinking activity timeline counts beers by month using Recent Date, helping reveal high-activity periods, gaps, and seasonal patterns."),
         timeline_chart,
