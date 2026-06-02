@@ -36,7 +36,15 @@ def _extract_labeled_rating_from_text(text: str, label: str) -> Optional[float]:
 
 def _attribute_texts(item) -> list[str]:
     values = []
-    attrs_to_check = ("title", "aria-label", "data-title", "data-original-title", "alt")
+    attrs_to_check = (
+        "title",
+        "aria-label",
+        "data-title",
+        "data-original-title",
+        "data-rating",
+        "data-score",
+        "alt",
+    )
     for node in item.find_all(True):
         for attr in attrs_to_check:
             value = node.get(attr)
@@ -50,13 +58,14 @@ def _rating_from_class_tokens(item) -> Optional[float]:
     for node in item.find_all(True):
         class_values = node.get("class") or []
         class_text = " ".join(str(value) for value in class_values)
-        if not re.search(r"rating|star|caps", class_text, flags=re.I):
-            continue
+        has_rating_context = bool(re.search(r"rating|star|caps", class_text, flags=re.I))
         for token in class_values:
             match = re.fullmatch(r"r(\d{1,2})", str(token).strip(), flags=re.I)
             if not match:
                 continue
             raw = int(match.group(1))
+            if not has_rating_context and raw not in range(0, 51):
+                continue
             if 0 <= raw <= 5:
                 return float(raw)
             if 0 <= raw <= 50:
@@ -112,7 +121,7 @@ def _extract_checkin_rating(item) -> Optional[float]:
 
     for text in _attribute_texts(item):
         rating = _rating_float(text)
-        if rating is not None and re.search(r"rating|rated|star", text, flags=re.I):
+        if rating is not None and re.search(r"rating|rated|star|score", text, flags=re.I):
             return rating
 
     return _rating_from_class_tokens(item)
@@ -120,6 +129,8 @@ def _extract_checkin_rating(item) -> Optional[float]:
 
 def _is_missing(value) -> bool:
     if value is None:
+        return True
+    if value == "":
         return True
     try:
         return bool(value != value)
@@ -132,6 +143,81 @@ def _raise_if_stopped(stop_requested):
         from app_runtime import TaskCancelled
 
         raise TaskCancelled()
+
+
+def _loose_checkin_items_for_ratings(soup):
+    """
+    Find check-in cards for rating recovery.
+
+    Unlike untapped_selenium.find_checkin_items, this intentionally does not require
+    a venue link. Venue links are useful for location recovery, but personal ratings
+    should be recoverable from check-ins even when the check-in has no venue.
+    """
+    import untapped_selenium
+
+    selectors = [
+        "div.checkin",
+        "div.item",
+        "li.item",
+        "div[class*='checkin']",
+        "div[class*='feed'] div.item",
+    ]
+    seen = set()
+    items = []
+    for selector in selectors:
+        for node in soup.select(selector):
+            beer_link = untapped_selenium.first_matching_anchor(
+                node,
+                lambda href: href and ("/beer/" in href or "/b/" in href),
+            )
+            if not beer_link:
+                continue
+            checkin_id = node.get("data-checkin-id")
+            if not checkin_id:
+                checkin_parent = node.find_parent(attrs={"data-checkin-id": True})
+                if checkin_parent:
+                    checkin_id = checkin_parent.get("data-checkin-id")
+            node_id = checkin_id or id(node)
+            if node_id in seen:
+                continue
+            seen.add(node_id)
+            items.append(node)
+    return items
+
+
+def _parse_checkin_rating_item(item) -> Optional[dict]:
+    import untapped_selenium
+
+    try:
+        beer_link = untapped_selenium.first_matching_anchor(
+            item,
+            lambda href: href and ("/beer/" in href or "/b/" in href),
+        )
+        if not beer_link:
+            return None
+
+        brewery_link = untapped_selenium.find_producer_anchor(item)
+        beer_name = untapped_selenium.clean_anchor_text(beer_link) or "Unknown"
+        brewery_name = untapped_selenium.clean_anchor_text(brewery_link) or "Unknown"
+
+        parsed = {
+            "beer_name": beer_name,
+            "brewery_name": brewery_name,
+            "rating": _extract_checkin_rating(item),
+        }
+
+        # Use the existing parser as a fallback for brewery/rating if it succeeds.
+        existing = untapped_selenium.parse_checkin_item(item)
+        if existing:
+            if parsed["brewery_name"] == "Unknown" and existing.get("brewery_name"):
+                parsed["brewery_name"] = existing.get("brewery_name")
+            if parsed["rating"] is None and existing.get("rating") is not None:
+                parsed["rating"] = existing.get("rating")
+
+        return parsed
+    except Exception as exc:
+        print(f"Warning: Could not parse check-in rating item: {exc}")
+        return None
 
 
 def _fetch_checkin_page_for_ratings(username: str, offset: int, cookies: dict, user_agent: str):
@@ -151,8 +237,8 @@ def _fetch_checkin_page_for_ratings(username: str, offset: int, cookies: dict, u
     soup = BeautifulSoup(response.text, "html.parser")
     return [
         parsed
-        for item in untapped_selenium.find_checkin_items(soup)
-        if (parsed := untapped_selenium.parse_checkin_item(item))
+        for item in _loose_checkin_items_for_ratings(soup)
+        if (parsed := _parse_checkin_rating_item(item))
     ]
 
 
@@ -175,6 +261,8 @@ def _collect_checkin_rating_matches_parallel(
         effective_max_pages = max(1, min(max_pages, (max_checkins + 24) // 25))
     offsets = list(range(0, effective_max_pages * 25, 25))
     scanned_checkins = 0
+    parsed_items_total = 0
+    key_matches_without_rating = 0
 
     for batch_start in range(0, len(offsets), batch_size):
         _raise_if_stopped(stop_requested)
@@ -212,6 +300,7 @@ def _collect_checkin_rating_matches_parallel(
         batch_had_short_page = False
         for offset in sorted(results):
             items = results[offset]
+            parsed_items_total += len(items)
             if items:
                 saw_items = True
             if len(items) < 10:
@@ -225,11 +314,21 @@ def _collect_checkin_rating_matches_parallel(
                 rating = parsed.get("rating")
                 if key in target_keys and rating is not None and key not in matches:
                     matches[key] = rating
+                elif key in target_keys and rating is None:
+                    key_matches_without_rating += 1
 
         if not saw_items or batch_had_short_page:
             break
 
-    print(f"Parallel check-in scan recovered {len(matches):,} missing personal ratings.")
+    print(
+        "Parallel check-in scan parsed "
+        f"{parsed_items_total:,} check-in rows and recovered {len(matches):,} missing personal ratings."
+    )
+    if key_matches_without_rating:
+        print(
+            "Warning: matched "
+            f"{key_matches_without_rating:,} missing beer rows in check-ins, but no rating was visible in those check-in cards."
+        )
     return matches
 
 
@@ -247,6 +346,8 @@ def _collect_checkin_rating_matches_with_selenium(
     matches = {}
     scanned_checkins = 0
     next_url = untapped_selenium.build_checkin_page_url(username)
+    parsed_items_total = 0
+    key_matches_without_rating = 0
     for page_num in range(1, max_pages + 1):
         _raise_if_stopped(stop_requested)
         if target_keys and target_keys.issubset(matches):
@@ -264,22 +365,35 @@ def _collect_checkin_rating_matches_with_selenium(
         else:
             soup = untapped_selenium.fetch_more_feed_page(driver, username, next_url)
 
-        checkin_items = untapped_selenium.find_checkin_items(soup)
+        checkin_items = _loose_checkin_items_for_ratings(soup)
         if not checkin_items:
             break
         scanned_checkins += len(checkin_items)
+        parsed_items_total += len(checkin_items)
         for item in checkin_items:
-            parsed = untapped_selenium.parse_checkin_item(item)
+            parsed = _parse_checkin_rating_item(item)
             if not parsed:
                 continue
             key = untapped_selenium.beer_producer_key(parsed.get("beer_name"), parsed.get("brewery_name"))
             rating = parsed.get("rating")
             if key in target_keys and rating is not None and key not in matches:
                 matches[key] = rating
+            elif key in target_keys and rating is None:
+                key_matches_without_rating += 1
         last_checkin_id = untapped_selenium.find_last_checkin_id(checkin_items)
         if not last_checkin_id:
             break
         next_url = untapped_selenium.build_more_feed_url(username, last_checkin_id)
+
+    print(
+        "Selenium check-in scan parsed "
+        f"{parsed_items_total:,} check-in rows and recovered {len(matches):,} missing personal ratings."
+    )
+    if key_matches_without_rating:
+        print(
+            "Warning: Selenium matched "
+            f"{key_matches_without_rating:,} missing beer rows in check-ins, but no rating was visible in those check-in cards."
+        )
     return matches
 
 
@@ -311,7 +425,7 @@ def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop
         cookies=cookies,
         user_agent=user_agent,
         stop_requested=stop_requested,
-        max_checkins=max(len(df) * 2, len(df)),
+        max_checkins=max(len(df) * 3, len(df)),
         max_workers=4,
     )
 
@@ -326,7 +440,7 @@ def _fill_missing_personal_ratings_from_checkins(driver, username: str, df, stop
             username,
             remaining_keys,
             stop_requested=stop_requested,
-            max_checkins=max(len(df) * 2, len(df)),
+            max_checkins=max(len(df) * 3, len(df)),
         )
         rating_matches.update(selenium_matches)
 
