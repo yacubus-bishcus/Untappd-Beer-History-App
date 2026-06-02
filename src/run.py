@@ -69,12 +69,28 @@ def resolve_backstop_total(
     provided_backstop_total: Optional[int],
     clean_run: bool = False,
 ) -> Optional[int]:
-    if clean_run:
-        return None
+    # An explicit --backstop-total should always win, even during --clean-run.
+    # Clean-run only disables the implicit backstop inferred from the existing CSV.
     if provided_backstop_total is not None:
         return provided_backstop_total
+    if clean_run:
+        return None
     existing_rows = count_csv_rows(output_path)
     return existing_rows or None
+
+
+def describe_backstop_mode(clean_run: bool, effective_backstop_total: Optional[int]):
+    if clean_run and effective_backstop_total is not None:
+        print(
+            "Clean run enabled: ignoring existing CSV data and stopping after "
+            f"{effective_backstop_total} visible beer entries."
+        )
+    elif clean_run:
+        print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
+    elif effective_backstop_total is not None:
+        print(f"Using backstop total: {effective_backstop_total}")
+    else:
+        print("No backstop total available. The scraper will stop when Show More is exhausted.")
 
 
 def perform_beer_fetch_workflow(
@@ -100,13 +116,7 @@ def perform_beer_fetch_workflow(
         )
     output_path = Path(output)
     effective_backstop_total = resolve_backstop_total(output_path, backstop_total, clean_run=clean_run)
-
-    if clean_run:
-        print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
-    elif effective_backstop_total is not None:
-        print(f"Using backstop total: {effective_backstop_total}")
-    else:
-        print("No backstop total available. The scraper will stop when Show More is exhausted.")
+    describe_backstop_mode(clean_run, effective_backstop_total)
 
     launch_url = f"https://untappd.com/user/{username}/beers"
     print(f"Launching Chrome for manual login at {launch_url}...")
@@ -274,10 +284,7 @@ def handle_selenium_fetch_beers(args):
         args.backstop_total,
         clean_run=args.clean_run,
     )
-    if args.clean_run:
-        print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
-    elif effective_backstop_total is not None:
-        print(f"Using backstop total: {effective_backstop_total}")
+    describe_backstop_mode(args.clean_run, effective_backstop_total)
 
     if not is_debugger_ready(args.attach_debugger):
         start_url = f"https://untappd.com/user/{args.username}/beers"
