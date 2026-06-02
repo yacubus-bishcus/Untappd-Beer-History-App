@@ -1,23 +1,23 @@
 import argparse
 import csv
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Callable, Optional
 
 from app_config import get_configured_username
-from paths import DEFAULT_OUTPUT_PATH, PROJECT_ROOT, STREAMLIT_APP_PATH
+from app_runtime import TaskCancelled
+from paths import DEFAULT_OUTPUT_PATH
 from untapped_selenium import (
     fetch_beers as selenium_fetch_beers,
     is_debugger_ready,
     launch_chrome_with_debugger,
+    prompt_manual_login as selenium_prompt_manual_login,
     start_manual_login as selenium_start_manual_login,
     wait_for_manual_login as selenium_wait_for_manual_login,
     wait_for_debugger,
     quit_driver,
 )
-from desktop_launcher import TaskCancelled
 
 DEFAULT_USERNAME = get_configured_username("")
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
@@ -34,12 +34,12 @@ def ensure_supported_python():
         )
 
 
-def run_streamlit_app():
-    subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", str(STREAMLIT_APP_PATH)],
-        check=True,
-        cwd=str(PROJECT_ROOT),
-    )
+def open_statistics_ui():
+    print("Opening native statistics UI...")
+    from untappd_beer_history.app import main as create_statistics_ui
+
+    app = create_statistics_ui()
+    app.main_loop()
 
 
 def count_csv_rows(path: Path) -> int:
@@ -54,7 +54,13 @@ def count_csv_rows(path: Path) -> int:
         return sum(1 for _ in reader)
 
 
-def resolve_backstop_total(output_path: Path, provided_backstop_total: Optional[int]) -> Optional[int]:
+def resolve_backstop_total(
+    output_path: Path,
+    provided_backstop_total: Optional[int],
+    clean_run: bool = False,
+) -> Optional[int]:
+    if clean_run:
+        return None
     if provided_backstop_total is not None:
         return provided_backstop_total
     existing_rows = count_csv_rows(output_path)
@@ -67,7 +73,7 @@ def perform_beer_fetch_workflow(
     output: str,
     backstop_total: Optional[int],
     user_data_dir: str,
-    open_streamlit_after: bool,
+    clean_run: bool = False,
     stop_requested: Optional[Callable[[], bool]] = None,
     on_driver_ready: Optional[Callable[[object], None]] = None,
 ):
@@ -83,9 +89,11 @@ def perform_beer_fetch_workflow(
             "or pass --username explicitly."
         )
     output_path = Path(output)
-    effective_backstop_total = resolve_backstop_total(output_path, backstop_total)
+    effective_backstop_total = resolve_backstop_total(output_path, backstop_total, clean_run=clean_run)
 
-    if effective_backstop_total is not None:
+    if clean_run:
+        print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
+    elif effective_backstop_total is not None:
         print(f"Using backstop total: {effective_backstop_total}")
     else:
         print("No backstop total available. The scraper will stop when Show More is exhausted.")
@@ -112,6 +120,7 @@ def perform_beer_fetch_workflow(
         if on_driver_ready is not None:
             on_driver_ready(driver)
         selenium_wait_for_manual_login(driver, timeout=300, stop_requested=stop_requested)
+        selenium_prompt_manual_login(driver, username, timeout=300, stop_requested=stop_requested)
 
         ensure_not_stopped()
         print(f"Fetching beer history for {username}...")
@@ -129,11 +138,6 @@ def perform_beer_fetch_workflow(
         if driver is not None:
             quit_driver(driver)
 
-    if open_streamlit_after:
-        ensure_not_stopped()
-        print("Opening Streamlit...")
-        run_streamlit_app()
-
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -147,13 +151,22 @@ Examples:
   python src/run.py selenium-launch-chrome
   python src/run.py selenium-fetch-beers
   python src/run.py selenium-fetch-beers --backstop-total 250
-  python src/run.py streamlit
         """,
     )
     parser.add_argument(
         "--update",
         action="store_true",
         help="Force a fresh Untappd download even if data/my_beers.csv already exists",
+    )
+    parser.add_argument(
+        "--clean-run",
+        action="store_true",
+        help="Ignore existing CSV/backstop data and fetch all visible beer history from scratch",
+    )
+    parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run the default workflow without opening the native app afterward",
     )
     parser.add_argument(
         "--username",
@@ -181,7 +194,6 @@ Examples:
         type=int,
         help="Optional expected total beer count for the default python src/run.py workflow",
     )
-
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     selenium_launch_chrome_parser = subparsers.add_parser(
@@ -246,6 +258,11 @@ Examples:
         type=int,
         help="Expected total beer count; defaults to the current number of rows in the output CSV if it exists",
     )
+    selenium_fetch_beers_parser.add_argument(
+        "--clean-run",
+        action="store_true",
+        help="Ignore existing CSV/backstop data and fetch until Show More is exhausted",
+    )
 
     run_default_parser = subparsers.add_parser(
         "run-default",
@@ -261,8 +278,16 @@ Examples:
         action="store_true",
         help="Force a fresh Untappd download even if data/my_beers.csv already exists",
     )
-
-    subparsers.add_parser("streamlit", help="Launch the beer history Streamlit dashboard")
+    run_default_parser.add_argument(
+        "--clean-run",
+        action="store_true",
+        help="Ignore existing CSV/backstop data and fetch all visible beer history from scratch",
+    )
+    run_default_parser.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run without opening the native app afterward",
+    )
 
     return parser.parse_args()
 
@@ -289,8 +314,14 @@ def handle_selenium_fetch_beers(args):
     if not args.username:
         raise SystemExit("No Untappd username is configured yet. Pass --username explicitly.")
     output_path = Path(args.output)
-    effective_backstop_total = resolve_backstop_total(output_path, args.backstop_total)
-    if effective_backstop_total is not None:
+    effective_backstop_total = resolve_backstop_total(
+        output_path,
+        args.backstop_total,
+        clean_run=args.clean_run,
+    )
+    if args.clean_run:
+        print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
+    elif effective_backstop_total is not None:
         print(f"Using backstop total: {effective_backstop_total}")
 
     if not is_debugger_ready(args.attach_debugger):
@@ -315,6 +346,7 @@ def handle_selenium_fetch_beers(args):
             attach_debugger=args.attach_debugger,
         )
         selenium_wait_for_manual_login(driver, timeout=args.timeout)
+        selenium_prompt_manual_login(driver, args.username, timeout=args.timeout)
 
         print(f"Fetching beer history from {args.username}...")
         df = selenium_fetch_beers(
@@ -332,9 +364,10 @@ def handle_selenium_fetch_beers(args):
 
 def handle_run_default(args):
     output_path = Path(args.output)
-    if output_path.exists() and not args.update:
+    if output_path.exists() and not args.update and not args.clean_run:
         print(f"Found existing {output_path}. Skipping Untappd download. Use --update to refresh.")
-        run_streamlit_app()
+        if not args.no_ui:
+            open_statistics_ui()
         return
 
     perform_beer_fetch_workflow(
@@ -343,8 +376,10 @@ def handle_run_default(args):
         output=args.output,
         backstop_total=args.backstop_total,
         user_data_dir=args.user_data_dir,
-        open_streamlit_after=True,
+        clean_run=args.clean_run,
     )
+    if not args.no_ui:
+        open_statistics_ui()
 
 
 def main():
@@ -359,14 +394,14 @@ def main():
             user_data_dir=getattr(args, "user_data_dir", DEFAULT_USER_DATA_DIR),
             backstop_total=getattr(args, "backstop_total", None),
             update=getattr(args, "update", False),
+            clean_run=getattr(args, "clean_run", False),
+            no_ui=getattr(args, "no_ui", False),
         )
         handle_run_default(namespace)
     elif args.command == "selenium-launch-chrome":
         handle_selenium_launch_chrome(args)
     elif args.command == "selenium-fetch-beers":
         handle_selenium_fetch_beers(args)
-    elif args.command == "streamlit":
-        run_streamlit_app()
     else:
         raise SystemExit("Unsupported command.")
 

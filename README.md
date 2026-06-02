@@ -1,20 +1,18 @@
 # Untappd Beer History
 
-Export your Untappd beer history with Selenium, save it to CSV, and explore it in a local dashboard.
+Export your Untappd beer history with Selenium, save it to CSV, and review local statistics in a native desktop app built with Toga.
 
 ## Best Download Option
 
 If you just want to use the app on macOS, download the latest DMG from GitHub Releases.
 
-- `GitHub Releases`:
-  Use the packaged `.dmg` installer
-- `Download ZIP`:
-  Source code only, intended for development or manual setup
+- `GitHub Releases`: packaged `.dmg` installer
+- `Download ZIP`: source code only, intended for development or manual setup
 
 ## Project Layout
 
 ```text
-untapped_data/
+Untappd-Beer-History-App/
 ├── data/
 ├── documentation/
 ├── resources/
@@ -22,17 +20,70 @@ untapped_data/
 └── pyproject.toml
 ```
 
+- `data/`: generated CSV, cache files, local config, and generated statistics HTML
+- `documentation/`: setup and usage docs
+- `resources/`: Briefcase app icon assets
+- `src/`: Python source files and `requirements.txt`
+- `pyproject.toml`: Briefcase packaging configuration
+
 ## Quick Start From Source
 
 Source mode is intended for development and manual local runs.
 
 ```bash
-cd apps/untapped_data
+cd apps/Untappd-Beer-History-App
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r src/requirements.txt
 python3 src/run.py
 ```
+
+The app opens a native window. Use:
+
+- `Update Data` to launch Chrome, sign in to Untappd if needed, scrape beer history, and write `data/my_beers.csv`
+- `Clean Run` to ignore the existing CSV row count/backstop and fetch your full visible Untappd beer history from scratch
+- `Statistics` to generate and open local statistics HTML with a consumed-location heatmap
+- `Stop Running Task` to stop a scrape or map build and close the open statistics tab when possible
+
+CLI clean run:
+
+```bash
+python3 src/run.py --clean-run
+python3 src/run.py --clean-run --no-ui
+python3 src/run.py selenium-fetch-beers --clean-run
+```
+
+For a Raspberry Pi 5 server, run the CLI from source with Chromium/chromedriver and a persistent `UNTAPPD_DATA_DIR`. The Pi is best used as the scraper/report host; see `documentation/README.md` for a systemd/timer example and LAN report serving.
+
+## CSV Schema
+
+The generated CSV is `data/my_beers.csv`.
+
+Important columns:
+
+- `Beer Name`
+- `Producer`
+- `Producer Location`
+- `Consumed Location`
+- `Lat`
+- `Long`
+- `Beer Type`
+- `My Rating`
+- `Global Rating`
+- `First Date`
+- `Recent Date`
+- `Total Checkins`
+
+`Producer Location` is where the beer is produced. `Consumed Location`, `Lat`, and `Long` come from the Untappd check-in venue page. The heatmap uses consumed-location coordinates and ignores `Untappd at Home` only for the map.
+
+## Generated Files
+
+- `data/my_beers.csv`: exported beer history
+- `data/producer_location_cache.json`: producer page location cache
+- `data/consumed_location_cache.json`: consumed venue city/coordinate cache
+- `data/app_config.json`: local app settings
+- `data/beer_statistics.html`: generated statistics page
+- `data/beer_map_fragment.js`: generated Plotly map data
 
 ## Build The macOS App
 
@@ -54,7 +105,7 @@ The rebuilt direct app appears in:
 
 The packaged installer appears in:
 
-- `dist/Untappd Beer History-0.1.0.dmg`
+- `dist/Untappd Beer History-0.2.1.dmg`
 
 ## More Docs
 

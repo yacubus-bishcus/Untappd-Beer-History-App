@@ -1,9 +1,8 @@
 .venv
 .DS_Store
-data/my_beers.csv
-data/producer_location_cache.json
-data/app_config.json
+data
 __pycache__
+*.egg-info/
 *.pyc
 *.pyo
 *.pyd
@@ -13,3 +12,4 @@ macOS
 build
 dist
 logs
+testing/
