@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from app_config import get_configured_username
 from app_runtime import TaskCancelled
 from paths import DEFAULT_OUTPUT_PATH
+from untapped_rating_parser import patch_untappd_selenium_rating_parser
 from untapped_selenium import (
     fetch_beers as selenium_fetch_beers,
     is_debugger_ready,
@@ -18,6 +19,8 @@ from untapped_selenium import (
     wait_for_debugger,
     quit_driver,
 )
+
+patch_untappd_selenium_rating_parser()
 
 DEFAULT_USERNAME = get_configured_username("")
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
@@ -207,27 +210,10 @@ Examples:
         "selenium-launch-chrome",
         help="Launch a real Chrome window with remote debugging for manual Untappd login",
     )
-    selenium_launch_chrome_parser.add_argument(
-        "--page",
-        default="beers",
-        choices=["login", "beers"],
-        help="Which Untappd page to open first",
-    )
-    selenium_launch_chrome_parser.add_argument(
-        "--username",
-        default=DEFAULT_USERNAME,
-        help="Untappd username used when opening the beer history page",
-    )
-    selenium_launch_chrome_parser.add_argument(
-        "--debugger-address",
-        default=DEFAULT_DEBUGGER_ADDRESS,
-        help="Debugger address that Selenium will attach to later",
-    )
-    selenium_launch_chrome_parser.add_argument(
-        "--user-data-dir",
-        default=DEFAULT_USER_DATA_DIR,
-        help="Chrome profile directory for the manual session",
-    )
+    selenium_launch_chrome_parser.add_argument("--page", default="beers", choices=["login", "beers"])
+    selenium_launch_chrome_parser.add_argument("--username", default=DEFAULT_USERNAME)
+    selenium_launch_chrome_parser.add_argument("--debugger-address", default=DEFAULT_DEBUGGER_ADDRESS)
+    selenium_launch_chrome_parser.add_argument("--user-data-dir", default=DEFAULT_USER_DATA_DIR)
 
     selenium_fetch_beers_parser = subparsers.add_parser(
         "selenium-fetch-beers",
@@ -254,21 +240,9 @@ Examples:
     run_default_parser.add_argument("--debugger-address", default=DEFAULT_DEBUGGER_ADDRESS)
     run_default_parser.add_argument("--user-data-dir", default=DEFAULT_USER_DATA_DIR)
     run_default_parser.add_argument("--backstop-total", type=int)
-    run_default_parser.add_argument(
-        "--update",
-        action="store_true",
-        help="Force a fresh Untappd download even if data/my_beers.csv already exists",
-    )
-    run_default_parser.add_argument(
-        "--clean-run",
-        action="store_true",
-        help="Ignore existing CSV/backstop data and fetch all visible beer history from scratch",
-    )
-    run_default_parser.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Run without opening the native app; open the browser statistics report instead",
-    )
+    run_default_parser.add_argument("--update", action="store_true")
+    run_default_parser.add_argument("--clean-run", action="store_true")
+    run_default_parser.add_argument("--no-ui", action="store_true")
 
     return parser.parse_args()
 
