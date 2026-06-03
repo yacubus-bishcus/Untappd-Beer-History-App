@@ -53,6 +53,16 @@ def _attribute_texts(item) -> list[str]:
     return values
 
 
+def _rating_from_data_attributes(item) -> Optional[float]:
+    """Extract ratings from explicit numeric attributes such as data-rating."""
+    for node in item.find_all(True):
+        for attr in ("data-rating", "data-score"):
+            rating = _rating_float(node.get(attr))
+            if rating is not None:
+                return rating
+    return None
+
+
 def _rating_from_class_tokens(item) -> Optional[float]:
     """Extract Untappd-style CSS ratings such as r45 -> 4.5 or r4 -> 4.0."""
     for node in item.find_all(True):
@@ -123,6 +133,10 @@ def _extract_checkin_rating(item) -> Optional[float]:
         rating = _rating_float(text)
         if rating is not None and re.search(r"rating|rated|star|score", text, flags=re.I):
             return rating
+
+    rating = _rating_from_data_attributes(item)
+    if rating is not None:
+        return rating
 
     return _rating_from_class_tokens(item)
 
@@ -213,33 +227,38 @@ def _loose_checkin_items_for_ratings(soup):
     """
     import untapped_selenium
 
-    selectors = [
-        "div.checkin",
-        "div.item",
-        "li.item",
-        "div[class*='checkin']",
-        "div[class*='feed'] div.item",
-    ]
     seen = set()
     items = []
-    for selector in selectors:
+
+    def add_item(node):
+        checkin_id = node.get("data-checkin-id")
+        if not checkin_id:
+            checkin_parent = node.find_parent(attrs={"data-checkin-id": True})
+            if checkin_parent:
+                checkin_id = checkin_parent.get("data-checkin-id")
+                node = checkin_parent
+
+        beer_link = untapped_selenium.first_matching_anchor(
+            node,
+            lambda href: href and ("/beer/" in href or "/b/" in href),
+        )
+        if not beer_link:
+            return
+        node_id = checkin_id or id(node)
+        if node_id in seen:
+            return
+        seen.add(node_id)
+        items.append(node)
+
+    for selector in ("div.item[data-checkin-id]", "li.item[data-checkin-id]"):
         for node in soup.select(selector):
-            beer_link = untapped_selenium.first_matching_anchor(
-                node,
-                lambda href: href and ("/beer/" in href or "/b/" in href),
-            )
-            if not beer_link:
-                continue
-            checkin_id = node.get("data-checkin-id")
-            if not checkin_id:
-                checkin_parent = node.find_parent(attrs={"data-checkin-id": True})
-                if checkin_parent:
-                    checkin_id = checkin_parent.get("data-checkin-id")
-            node_id = checkin_id or id(node)
-            if node_id in seen:
-                continue
-            seen.add(node_id)
-            items.append(node)
+            add_item(node)
+    if items:
+        return items
+
+    for selector in ("div.item", "li.item", "div.checkin"):
+        for node in soup.select(selector):
+            add_item(node)
     return items
 
 
@@ -247,8 +266,9 @@ def _parse_checkin_rating_item(item) -> Optional[dict]:
     import untapped_selenium
 
     try:
+        text_node = item.select_one("p.text")
         beer_link = untapped_selenium.first_matching_anchor(
-            item,
+            text_node or item,
             lambda href: href and ("/beer/" in href or "/b/" in href),
         )
         if not beer_link:
@@ -355,14 +375,11 @@ def _collect_checkin_rating_matches_parallel(
                     results[offset] = []
 
         saw_items = False
-        batch_had_short_page = False
         for offset in sorted(results):
             items = results[offset]
             parsed_items_total += len(items)
             if items:
                 saw_items = True
-            if len(items) < 10:
-                batch_had_short_page = True
             scanned_checkins += len(items)
             for parsed in items:
                 key = untapped_selenium.beer_producer_key(
@@ -375,7 +392,7 @@ def _collect_checkin_rating_matches_parallel(
                 elif key in target_keys and rating is None:
                     key_matches_without_rating += 1
 
-        if not saw_items or batch_had_short_page:
+        if not saw_items:
             break
 
     print(

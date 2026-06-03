@@ -212,3 +212,6 @@ Recommended retest flow after code changes:
 - Consumed venue coordinates are cached in `data/consumed_location_cache.json`
 - The native desktop UI uses Toga and generates local statistics HTML
 - The bundled app window shows a version/build stamp so you can tell whether you are opening a fresh build or a stale installed copy
+
+## Troubleshooting 
+In the Developer Tools Console Use `copy(document.documentElement.outerHTML)` to copy the entire current page HTML to your clipboard 

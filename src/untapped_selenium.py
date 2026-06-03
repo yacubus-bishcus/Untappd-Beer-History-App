@@ -4,6 +4,7 @@ import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from html import unescape
@@ -384,7 +385,15 @@ def wait_for_manual_login(driver: webdriver.Remote, timeout: int = 300, stop_req
     deadline = time.time() + timeout
     while time.time() < deadline:
         _raise_if_stopped(stop_requested)
-        if "/login" not in driver.current_url.lower():
+        try:
+            current_url = driver.current_url
+        except Exception:
+            current_url = ""
+        try:
+            page_title = driver.title
+        except Exception:
+            page_title = ""
+        if not _should_prompt_for_manual_login(current_url, page_title):
             print("✓ Manual login detected.")
             return
         time.sleep(0.5)
@@ -404,13 +413,30 @@ def _should_prompt_for_manual_login(url: str, title: str) -> bool:
 
 
 def prompt_manual_login(driver: webdriver.Remote, username: str, timeout: int = 300, stop_requested=None):
-    print("\n⚠️  Untappd login appears to be required before beer history can load.")
-    print("Please complete login manually in the open browser window.")
-    print("If a CAPTCHA or Cloudflare challenge is shown, resolve it and then return here.")
+    current_url = ""
+    page_title = ""
     try:
-        input("Press Enter after you have completed login in the browser window...")
+        current_url = driver.current_url
     except Exception:
-        print("Unable to prompt for interactive confirmation. Waiting for login completion instead...")
+        current_url = ""
+    try:
+        page_title = driver.title
+    except Exception:
+        page_title = ""
+
+    if not _should_prompt_for_manual_login(current_url, page_title):
+        print("Manual login already appears complete; continuing without an Enter prompt.")
+    else:
+        print("\nUntappd login appears to be required before beer history can load.")
+        print("Please complete login manually in the open browser window.")
+        print("If a CAPTCHA or Cloudflare challenge is shown, resolve it in Chrome.")
+        if sys.stdin and sys.stdin.isatty():
+            try:
+                input("Press Enter after you have completed login in the browser window...")
+            except Exception:
+                print("Unable to prompt for interactive confirmation. Waiting for login completion instead...")
+        else:
+            print("No interactive terminal is available, so the app will auto-detect login completion.")
 
     wait_for_manual_login(driver, timeout=timeout, stop_requested=stop_requested)
     print("Login completed. Refreshing the beer history page...")
