@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 import queue
 import subprocess
 import sys
@@ -92,5 +93,7 @@ def open_export_folder_path(output: str):
     target = Path(output).expanduser().resolve().parent
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(target)], cwd=str(PROJECT_ROOT))
+    elif sys.platform == "win32":
+        os.startfile(str(target))  # type: ignore[attr-defined]
     else:
         subprocess.Popen(["xdg-open", str(target)], cwd=str(PROJECT_ROOT))

@@ -224,9 +224,42 @@ def wait_for_debugger(debugger_address: str, timeout: int = 20) -> bool:
     return False
 
 
+def default_chrome_user_data_dir() -> str:
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return str(Path(base) / "Untappd Beer History" / "ChromeProfile")
+        return str(Path.home() / "AppData" / "Local" / "Untappd Beer History" / "ChromeProfile")
+    return "/tmp/untappd-manual"
+
+
+def find_chrome_binary() -> Optional[str]:
+    names = ["google-chrome", "chrome", "chromium", "chromium-browser"]
+    if sys.platform == "win32":
+        names = ["chrome.exe", "chrome", *names]
+        candidate_roots = [
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            os.environ.get("LOCALAPPDATA"),
+        ]
+        for root in candidate_roots:
+            if not root:
+                continue
+            candidate = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if candidate.exists():
+                return str(candidate)
+
+    for name in names:
+        binary = shutil.which(name)
+        if binary:
+            return binary
+
+    return None
+
+
 def launch_chrome_with_debugger(
     debugger_address: str = "127.0.0.1:9222",
-    user_data_dir: str = "/tmp/untappd-manual",
+    user_data_dir: Optional[str] = None,
     start_url: Optional[str] = None,
 ):
     """
@@ -241,34 +274,23 @@ def launch_chrome_with_debugger(
         raise ValueError("For safety, debugger host must be 127.0.0.1 or localhost.")
 
     start_url = start_url or f"{UNTAPPD_BASE}/user/login"
+    user_data_dir = user_data_dir or default_chrome_user_data_dir()
+    Path(user_data_dir).expanduser().mkdir(parents=True, exist_ok=True)
     chrome_args = [
-        "--args",
         f"--remote-debugging-port={port}",
         f"--user-data-dir={user_data_dir}",
         "--new-window",
         start_url,
     ]
 
-    if shutil.which("open"):
-        command = ["open", "-na", "Google Chrome", *chrome_args]
+    if sys.platform == "darwin" and shutil.which("open"):
+        command = ["open", "-na", "Google Chrome", "--args", *chrome_args]
         subprocess.Popen(command)
         return
 
-    chrome_binary = (
-        shutil.which("google-chrome")
-        or shutil.which("chrome")
-        or shutil.which("chromium")
-        or shutil.which("chromium-browser")
-    )
+    chrome_binary = find_chrome_binary()
     if chrome_binary:
-        command = [
-            chrome_binary,
-            f"--remote-debugging-port={port}",
-            f"--user-data-dir={user_data_dir}",
-            "--new-window",
-            start_url,
-        ]
-        subprocess.Popen(command)
+        subprocess.Popen([chrome_binary, *chrome_args])
         return
 
     raise RuntimeError(

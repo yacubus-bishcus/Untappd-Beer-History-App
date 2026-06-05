@@ -1,5 +1,6 @@
 import argparse
 import csv
+import os
 import sys
 import time
 from pathlib import Path
@@ -25,7 +26,18 @@ patch_untappd_selenium_rating_parser()
 DEFAULT_USERNAME = get_configured_username("")
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
 DEFAULT_OUTPUT = str(DEFAULT_OUTPUT_PATH)
-DEFAULT_USER_DATA_DIR = "/tmp/untappd-manual"
+
+
+def default_chrome_user_data_dir() -> str:
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return str(Path(base) / "Untappd Beer History" / "ChromeProfile")
+        return str(Path.home() / "AppData" / "Local" / "Untappd Beer History" / "ChromeProfile")
+    return "/tmp/untappd-manual"
+
+
+DEFAULT_USER_DATA_DIR = default_chrome_user_data_dir()
 
 
 def ensure_supported_python():

@@ -51,6 +51,15 @@ BRIEFCASE_HOME=.briefcase-home briefcase build macOS
 BRIEFCASE_HOME=.briefcase-home briefcase package macOS --adhoc-sign
 ```
 
+Windows packaging:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\packaging\windows\build-installer.ps1
+```
+
+The installer appears under `dist\installer\`. See `packaging/windows/README.md` for options.
+
 Best install path for non-developers:
 
 - Download the DMG from `GitHub Releases`

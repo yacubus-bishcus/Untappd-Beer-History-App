@@ -107,6 +107,31 @@ The packaged installer appears in:
 
 - `dist/Untappd Beer History-0.2.1.dmg`
 
+## Build The Windows Installer
+
+Windows packaging uses PyInstaller plus Inno Setup and should be run on Windows.
+
+Requirements:
+
+- Python 3.12
+- Inno Setup 6
+- Google Chrome
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\packaging\windows\build-installer.ps1
+```
+
+The PyInstaller app appears in:
+
+- `dist\UntappdBeerHistory\UntappdBeerHistory.exe`
+
+The Inno Setup installer appears in:
+
+- `dist\installer\Untappd-Beer-History-Setup-0.2.1.exe`
+
+See `packaging/windows/README.md` for build options.
+
 ## More Docs
 
 - `documentation/README.md`

@@ -206,6 +206,29 @@ Recommended retest flow after code changes:
 3. Package a fresh DMG
 4. Reinstall from the new DMG if the direct bundle looks good
 
+## Windows Packaging
+
+The Windows distribution path is PyInstaller plus Inno Setup. Build it on Windows with Python 3.12 and Inno Setup 6 installed:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\packaging\windows\build-installer.ps1
+```
+
+The PyInstaller app appears in:
+
+```text
+dist\UntappdBeerHistory\UntappdBeerHistory.exe
+```
+
+The packaged installer appears in:
+
+```text
+dist\installer\Untappd-Beer-History-Setup-0.2.1.exe
+```
+
+The installed app writes user data to `%LOCALAPPDATA%\Untappd Beer History`.
+
 ## Notes
 
 - Producer locations are cached in `data/producer_location_cache.json`
@@ -213,5 +236,5 @@ Recommended retest flow after code changes:
 - The native desktop UI uses Toga and generates local statistics HTML
 - The bundled app window shows a version/build stamp so you can tell whether you are opening a fresh build or a stale installed copy
 
-## Troubleshooting 
-In the Developer Tools Console Use `copy(document.documentElement.outerHTML)` to copy the entire current page HTML to your clipboard 
+## Troubleshooting
+In the Developer Tools Console Use `copy(document.documentElement.outerHTML)` to copy the entire current page HTML to your clipboard

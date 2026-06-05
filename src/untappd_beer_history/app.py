@@ -17,38 +17,42 @@ import pandas as pd
 import plotly.express as px
 from plotly.utils import PlotlyJSONEncoder
 import toga
-from app_config import (  # noqa: E402
-    get_configured_username,
-    set_configured_username,
-)
-from run import DEFAULT_DEBUGGER_ADDRESS, DEFAULT_USER_DATA_DIR, perform_beer_fetch_workflow  # noqa: E402
-from toga.style import Pack
-from toga.style.pack import COLUMN, ROW
-
-from untappd_beer_history.plot_heatmap import (
-    build_beer_info_by_location,
-    build_location_heatmap_figure,
-)
-from untappd_beer_history import __version__
 
 
 def default_runtime_data_dir() -> Path:
     home = Path.home()
     if sys.platform == "darwin":
         return home / "Library" / "Application Support" / "Untappd Beer History"
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if base:
+            return Path(base) / "Untappd Beer History"
+        return home / "AppData" / "Local" / "Untappd Beer History"
     return home / ".local" / "share" / "untappd-beer-history"
 
 
 os.environ.setdefault("UNTAPPD_DATA_DIR", str(default_runtime_data_dir()))
 Path(os.environ["UNTAPPD_DATA_DIR"]).mkdir(parents=True, exist_ok=True)
 
+from app_config import (  # noqa: E402
+    get_configured_username,
+    set_configured_username,
+)
 from app_runtime import (  # noqa: E402
     DEFAULT_OUTPUT,
     ProcessManager,
     TaskCancelled,
     open_export_folder_path,
 )
+from run import DEFAULT_DEBUGGER_ADDRESS, DEFAULT_USER_DATA_DIR, perform_beer_fetch_workflow  # noqa: E402
+from toga.style import Pack
+from toga.style.pack import COLUMN, ROW
 from untapped_selenium import quit_driver  # noqa: E402
+from untappd_beer_history.plot_heatmap import (  # noqa: E402
+    build_beer_info_by_location,
+    build_location_heatmap_figure,
+)
+from untappd_beer_history import __version__  # noqa: E402
 
 
 def decode_plotly_binary_arrays(value):
@@ -201,7 +205,8 @@ end shouldClose
 def build_stamp() -> str:
     app_file = Path(__file__).resolve()
     build_time = datetime.fromtimestamp(app_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-    mode = "Bundled app" if "/Resources/app/" in str(app_file) else "Source"
+    is_briefcase_bundle = "/Resources/app/" in str(app_file)
+    mode = "Bundled app" if is_briefcase_bundle or getattr(sys, "frozen", False) else "Source"
     return f"Version {__version__} | {mode} | {build_time}"
 
 

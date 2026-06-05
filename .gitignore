@@ -8,6 +8,7 @@ __pycache__
 *.pyd
 .briefcase-home
 .briefcase-venv
+.windows-build-venv
 macOS
 build
 dist
