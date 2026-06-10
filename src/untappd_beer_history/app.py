@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -203,7 +204,7 @@ end shouldClose
 
 
 def build_stamp() -> str:
-    app_file = Path(__file__).resolve()
+    app_file = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else Path(__file__).resolve()
     build_time = datetime.fromtimestamp(app_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
     is_briefcase_bundle = "/Resources/app/" in str(app_file)
     mode = "Bundled app" if is_briefcase_bundle or getattr(sys, "frozen", False) else "Source"
@@ -212,6 +213,49 @@ def build_stamp() -> str:
 
 class UntappdBeerHistoryApp(toga.App):
     def startup(self):
+        self.startup_log_path = Path(os.environ["UNTAPPD_DATA_DIR"]) / "startup.log"
+        self.log_output = toga.MultilineTextInput(
+            readonly=True,
+            value="Starting Untappd Beer History...\n",
+            style=Pack(flex=1),
+        )
+        self.status_label = toga.Label("Initializing...", style=Pack(margin_bottom=8))
+        startup_content = toga.Box(
+            style=Pack(direction=COLUMN, margin=16),
+            children=[self.status_label, self.log_output],
+        )
+        self.main_window = toga.MainWindow(title=self.formal_name, size=(900, 700))
+        self.main_window.content = startup_content
+        self.main_window.show()
+
+        self._append_startup_log(f"Data directory: {os.environ['UNTAPPD_DATA_DIR']}")
+        self._append_startup_log("Diagnostic window opened.")
+        asyncio.create_task(self.initialize_ui())
+
+    def _append_startup_log(self, message):
+        line = f"{message}\n"
+        if hasattr(self, "log_output"):
+            self.log_output.value = (self.log_output.value or "") + line
+            self.log_output.scroll_to_bottom()
+        try:
+            self.startup_log_path.parent.mkdir(parents=True, exist_ok=True)
+            with self.startup_log_path.open("a", encoding="utf-8") as handle:
+                handle.write(line)
+        except OSError:
+            pass
+
+    async def initialize_ui(self):
+        await asyncio.sleep(0)
+        try:
+            self._append_startup_log("Building application controls...")
+            self._build_main_ui()
+            self._append_startup_log("Application ready.")
+        except Exception:
+            details = traceback.format_exc()
+            self.status_label.text = "Startup failed"
+            self._append_startup_log(details)
+
+    def _build_main_ui(self):
         self.manager = ProcessManager()
         self.build_stamp_text = build_stamp()
         self.username_input = toga.TextInput(
@@ -238,11 +282,8 @@ class UntappdBeerHistoryApp(toga.App):
         )
         self.status_label = toga.Label("Ready", style=Pack(margin_top=8))
         self.progress = toga.ProgressBar(max=None, style=Pack(margin_top=8))
-        self.log_output = toga.MultilineTextInput(
-            readonly=True,
-            value=f"Launcher ready.\n{self.build_stamp_text}\n",
-            style=Pack(flex=1, margin_top=8),
-        )
+        self.log_output.style = Pack(flex=1, margin_top=8)
+        self.log_output.value = (self.log_output.value or "") + f"Launcher ready.\n{self.build_stamp_text}\n"
 
         controls = toga.Box(
             style=Pack(direction=COLUMN, margin=16, gap=10),
@@ -274,9 +315,7 @@ class UntappdBeerHistoryApp(toga.App):
             ],
         )
 
-        self.main_window = toga.MainWindow(title=self.formal_name, size=(900, 700))
         self.main_window.content = controls
-        self.main_window.show()
 
         asyncio.create_task(self.poll_events())
         asyncio.create_task(self.finish_first_launch_setup())

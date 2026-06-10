@@ -1,0 +1,51 @@
+UNTAPPD BEER HISTORY
+LICENSE AND DISCLAIMER
+
+You must accept these terms before installing the software.
+
+MIT LICENSE
+
+Copyright (c) 2026 Jacob Bickus
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+SUPPLEMENTAL DISCLAIMER
+
+Untappd Beer History is an independent project. It is not affiliated with,
+endorsed by, sponsored by, or officially connected with Untappd or its
+owners. Untappd and related names and marks belong to their respective
+owners.
+
+The software automates browser activity and processes information available
+through a user's Untappd account. You are solely responsible for ensuring
+that your installation and use comply with all applicable laws, account
+terms, website terms, privacy obligations, and organizational policies.
+
+Website behavior, page structure, browser compatibility, and third-party
+services may change without notice. The software may stop working, retrieve
+incomplete or inaccurate information, or cause unintended account or data
+effects. Review generated data before relying on it.
+
+You are responsible for protecting account access, exported information,
+local browser profiles, and other data created or used by the software. Do
+not use the software to access an account or information without
+authorization.
+
+By installing the software, you acknowledge these risks and accept full
+responsibility for your use of it.

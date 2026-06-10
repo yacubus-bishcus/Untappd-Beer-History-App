@@ -33,6 +33,9 @@ function Resolve-InnoCompiler {
             $Candidates += Join-Path $Root "Inno Setup 6\ISCC.exe"
         }
     }
+    if ($env:LOCALAPPDATA) {
+        $Candidates += Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
+    }
 
     foreach ($Candidate in $Candidates) {
         if (Test-Path $Candidate) {
@@ -40,7 +43,7 @@ function Resolve-InnoCompiler {
         }
     }
 
-    throw "Inno Setup 6 compiler was not found. Install Inno Setup or pass -InnoCompiler C:\Path\To\ISCC.exe."
+    throw "Inno Setup 6 compiler was not found. Install it with 'winget install JRSoftware.InnoSetup', or pass -InnoCompiler C:\Path\To\ISCC.exe."
 }
 
 Push-Location $RepoRoot
@@ -65,9 +68,15 @@ try {
 
     if (-not (Test-Path $VenvPython)) {
         & $Python @PythonArgs -m venv $VenvDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not create the Windows build environment."
+        }
     }
 
     $VenvVersionInfo = (& $VenvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not run Python from the Windows build environment."
+    }
     $VenvVersionParts = $VenvVersionInfo.Split(".")
     if (
         [int]$VenvVersionParts[0] -lt 3 -or
@@ -77,16 +86,32 @@ try {
     }
 
     & $VenvPython -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not upgrade pip in the Windows build environment."
+    }
+
     & $VenvPython -m pip install -r (Join-Path $RepoRoot "src\requirements.txt") -r (Join-Path $PSScriptRoot "requirements-build.txt")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not install the Windows build dependencies."
+    }
 
     $AppVersion = (& $VenvPython -c "import pathlib, tomllib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not read the application version from pyproject.toml."
+    }
 
     & $VenvPython -m PyInstaller --clean --noconfirm $SpecPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller failed to build the Windows application."
+    }
 
     $Iscc = Resolve-InnoCompiler $InnoCompiler
     Push-Location $PSScriptRoot
     try {
         & $Iscc "/DAppVersion=$AppVersion" $InnoScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup failed to build the Windows installer."
+        }
     }
     finally {
         Pop-Location

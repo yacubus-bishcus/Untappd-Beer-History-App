@@ -7,7 +7,7 @@ name = "untappd-beer-history"
 version = "0.2.1"
 description = "Native desktop app for exporting and analyzing Untappd beer history."
 requires-python = ">=3.12"
-license = { text = "Proprietary" }
+license = { file = "LICENSE" }
 authors = [
   { name = "Jacob Bickus" }
 ]

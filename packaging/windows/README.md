@@ -6,10 +6,14 @@ Run these commands from a Windows machine with Python 3.12 or newer, Google Chro
 
 ```powershell
 python --version 
-where iscc 
+where.exe iscc
 winget install JRSoftware.InnoSetup
 powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-installer.ps1
 ```
+
+In PowerShell, use `where.exe iscc` or `Get-Command ISCC.exe`; plain `where`
+is an alias for `Where-Object`. The build script also detects per-user Inno
+Setup installations under `%LOCALAPPDATA%\Programs\Inno Setup 6`.
 
 The script creates a local build virtual environment, installs the app dependencies, installs PyInstaller and `toga-winforms`, builds `dist\UntappdBeerHistory\UntappdBeerHistory.exe`, and then writes the installer to:
 

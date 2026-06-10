@@ -217,6 +217,14 @@ Then open `http://pi5server:8088/beer_statistics.html`.
 - Beer details and venue coordinates are cached in JSON across runs, reducing repeat page loads and request volume.
 - The bundled app displays a version/build stamp to help identify stale installations.
 
+## License
+
+This project is licensed under the MIT License. See `LICENSE`.
+
+Untappd Beer History is an independent project and is not affiliated with or
+endorsed by Untappd. Users are responsible for complying with applicable
+terms, laws, privacy obligations, and account permissions.
+
 ## Troubleshooting
 
 To capture a page for parser debugging, open the browser Developer Tools console and run:

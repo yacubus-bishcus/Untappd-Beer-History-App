@@ -5,7 +5,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(SPECPATH).resolve().parents[1]
 SRC = ROOT / "src"
 APP_NAME = "UntappdBeerHistory"
 ICON = ROOT / "resources" / "appicon.ico"

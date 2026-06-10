@@ -22,6 +22,7 @@ OutputDir={#SourceRoot}\dist\installer
 OutputBaseFilename=Untappd-Beer-History-Setup-{#AppVersion}
 SetupIconFile={#SourceRoot}\resources\appicon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
+LicenseFile=LICENSE-AND-DISCLAIMER.txt
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
