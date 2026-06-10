@@ -1,8 +1,8 @@
 urllib3<2
 pandas
 plotly
-requests
 beautifulsoup4
 selenium
+tqdm
 webdriver-manager
 toga

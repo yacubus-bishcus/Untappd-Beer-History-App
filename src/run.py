@@ -5,27 +5,29 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
+import pandas as pd
+
 from app_config import get_configured_username
 from app_runtime import TaskCancelled
 from paths import DEFAULT_OUTPUT_PATH
-from untappd_rating_parser import patch_untappd_selenium_rating_parser
-from untapped_selenium import (
+from untappd_scraper import (
+    CSV_COLUMNS,
+    checkin_identity_from_row,
+    default_chrome_user_data_dir,
     fetch_beers as selenium_fetch_beers,
     is_debugger_ready,
     launch_chrome_with_debugger,
     prompt_manual_login as selenium_prompt_manual_login,
     start_manual_login as selenium_start_manual_login,
-    wait_for_manual_login as selenium_wait_for_manual_login,
     wait_for_debugger,
     quit_driver,
 )
 
-patch_untappd_selenium_rating_parser()
-
 DEFAULT_USERNAME = get_configured_username("")
 DEFAULT_DEBUGGER_ADDRESS = "127.0.0.1:9222"
 DEFAULT_OUTPUT = str(DEFAULT_OUTPUT_PATH)
-DEFAULT_USER_DATA_DIR = "/tmp/untappd-manual"
+
+DEFAULT_USER_DATA_DIR = default_chrome_user_data_dir()
 
 
 def ensure_supported_python():
@@ -64,6 +66,44 @@ def count_csv_rows(path: Path) -> int:
         return sum(1 for _ in reader)
 
 
+def load_existing_history(output_path: Path, clean_run: bool) -> pd.DataFrame:
+    if clean_run or not output_path.exists():
+        return pd.DataFrame(columns=CSV_COLUMNS)
+    return pd.read_csv(output_path)
+
+
+def existing_checkin_keys(df: pd.DataFrame) -> set[tuple[str, str, str]]:
+    if df.empty:
+        return set()
+    return {
+        checkin_identity_from_row(row)
+        for _, row in df.iterrows()
+    }
+
+
+def merge_checkin_history(existing_df: pd.DataFrame, new_df: pd.DataFrame) -> pd.DataFrame:
+    if existing_df.empty:
+        combined = new_df.copy()
+    elif new_df.empty:
+        combined = existing_df.copy()
+    else:
+        combined = pd.concat([new_df, existing_df], ignore_index=True)
+
+    if combined.empty:
+        return pd.DataFrame(columns=CSV_COLUMNS)
+
+    combined = combined.copy()
+    combined["_checkin_key"] = [
+        checkin_identity_from_row(row)
+        for _, row in combined.iterrows()
+    ]
+    combined = combined.drop_duplicates(subset="_checkin_key", keep="first")
+    combined["_sort_date"] = pd.to_datetime(combined["Recent Date"], errors="coerce", utc=True)
+    combined = combined.sort_values("_sort_date", ascending=False, na_position="last")
+    combined = combined.drop(columns=["_checkin_key", "_sort_date"]).reset_index(drop=True)
+    return combined.reindex(columns=CSV_COLUMNS)
+
+
 def resolve_backstop_total(
     output_path: Path,
     provided_backstop_total: Optional[int],
@@ -79,16 +119,25 @@ def resolve_backstop_total(
     return existing_rows or None
 
 
-def describe_backstop_mode(clean_run: bool, effective_backstop_total: Optional[int]):
+def describe_backstop_mode(
+    clean_run: bool,
+    effective_backstop_total: Optional[int],
+    existing_count: int = 0,
+):
     if clean_run and effective_backstop_total is not None:
         print(
             "Clean run enabled: ignoring existing CSV data and stopping after "
-            f"{effective_backstop_total} visible beer entries."
+            f"{effective_backstop_total} visible check-ins."
         )
     elif clean_run:
         print("Clean run enabled: ignoring existing CSV/backstop and fetching until Show More is exhausted.")
     elif effective_backstop_total is not None:
-        print(f"Using backstop total: {effective_backstop_total}")
+        additional_target = max(0, effective_backstop_total - existing_count)
+        print(
+            f"Update target: {effective_backstop_total:,} total check-ins. "
+            f"Existing CSV: {existing_count:,}. "
+            f"Up to {additional_target:,} additional check-ins will be pulled if they exist."
+        )
     else:
         print("No backstop total available. The scraper will stop when Show More is exhausted.")
 
@@ -115,17 +164,23 @@ def perform_beer_fetch_workflow(
             "or pass --username explicitly."
         )
     output_path = Path(output)
+    existing_df = load_existing_history(output_path, clean_run=clean_run)
     effective_backstop_total = resolve_backstop_total(output_path, backstop_total, clean_run=clean_run)
-    describe_backstop_mode(clean_run, effective_backstop_total)
+    describe_backstop_mode(clean_run, effective_backstop_total, existing_count=len(existing_df))
 
-    launch_url = f"https://untappd.com/user/{username}/beers"
-    print(f"Launching Chrome for manual login at {launch_url}...")
+    launch_url = f"https://untappd.com/user/{username}"
     ensure_not_stopped()
-    launch_chrome_with_debugger(
-        debugger_address=debugger_address,
-        user_data_dir=user_data_dir,
-        start_url=launch_url,
-    )
+    if not is_debugger_ready(debugger_address):
+        print(f"Launching Chrome for manual login at {launch_url}...")
+        launch_chrome_with_debugger(
+            debugger_address=debugger_address,
+            user_data_dir=user_data_dir,
+            start_url=launch_url,
+        )
+        if not wait_for_debugger(debugger_address, timeout=20):
+            raise RuntimeError(f"Could not connect to Chrome debugger at {debugger_address}.")
+    else:
+        print(f"Using the existing Chrome debugger at {debugger_address}...")
 
     driver = None
     try:
@@ -139,7 +194,6 @@ def perform_beer_fetch_workflow(
         )
         if on_driver_ready is not None:
             on_driver_ready(driver)
-        selenium_wait_for_manual_login(driver, timeout=300, stop_requested=stop_requested)
         selenium_prompt_manual_login(driver, username, timeout=300, stop_requested=stop_requested)
 
         ensure_not_stopped()
@@ -148,12 +202,17 @@ def perform_beer_fetch_workflow(
             driver,
             username=username,
             backstop_total=effective_backstop_total,
+            existing_checkin_keys=existing_checkin_keys(existing_df),
             stop_requested=stop_requested,
         )
         ensure_not_stopped()
+        merged_df = merge_checkin_history(existing_df, df)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path, index=False)
-        print(f"Saved data to {output_path}")
+        merged_df.to_csv(output_path, index=False)
+        print(
+            f"Saved {len(merged_df):,} total check-ins to {output_path} "
+            f"({len(df):,} added during this update)."
+        )
     finally:
         if driver is not None:
             quit_driver(driver)
@@ -181,7 +240,7 @@ Examples:
     parser.add_argument(
         "--clean-run",
         action="store_true",
-        help="Ignore existing CSV/backstop data and fetch all visible beer history from scratch",
+        help="Ignore existing CSV/backstop data and fetch all visible check-ins from scratch",
     )
     parser.add_argument(
         "--no-ui",
@@ -212,7 +271,7 @@ Examples:
     parser.add_argument(
         "--backstop-total",
         type=int,
-        help="Optional expected total beer count for the default python src/run.py workflow",
+        help="Optional maximum check-in count for the default python src/run.py workflow",
     )
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
@@ -227,7 +286,7 @@ Examples:
 
     selenium_fetch_beers_parser = subparsers.add_parser(
         "selenium-fetch-beers",
-        help="Fetch beer history from the Untappd /beers page using Selenium",
+        help="Fetch check-in history from the Untappd user page using Selenium",
     )
     selenium_fetch_beers_parser.add_argument("--username", default=DEFAULT_USERNAME)
     selenium_fetch_beers_parser.add_argument("--output", "-o", default=DEFAULT_OUTPUT)
@@ -263,7 +322,7 @@ def handle_selenium_launch_chrome(args):
     if args.page == "login":
         start_url = "https://untappd.com/user/login"
     else:
-        start_url = f"https://untappd.com/user/{args.username}/beers"
+        start_url = f"https://untappd.com/user/{args.username}"
 
     launch_chrome_with_debugger(
         debugger_address=args.debugger_address,
@@ -279,15 +338,16 @@ def handle_selenium_fetch_beers(args):
     if not args.username:
         raise SystemExit("No Untappd username is configured yet. Pass --username explicitly.")
     output_path = Path(args.output)
+    existing_df = load_existing_history(output_path, clean_run=args.clean_run)
     effective_backstop_total = resolve_backstop_total(
         output_path,
         args.backstop_total,
         clean_run=args.clean_run,
     )
-    describe_backstop_mode(args.clean_run, effective_backstop_total)
+    describe_backstop_mode(args.clean_run, effective_backstop_total, existing_count=len(existing_df))
 
     if not is_debugger_ready(args.attach_debugger):
-        start_url = f"https://untappd.com/user/{args.username}/beers"
+        start_url = f"https://untappd.com/user/{args.username}"
         print(f"No Chrome debugger detected at {args.attach_debugger}. Launching Chrome automatically...")
         launch_chrome_with_debugger(
             debugger_address=args.attach_debugger,
@@ -307,7 +367,6 @@ def handle_selenium_fetch_beers(args):
             headless=True,
             attach_debugger=args.attach_debugger,
         )
-        selenium_wait_for_manual_login(driver, timeout=args.timeout)
         selenium_prompt_manual_login(driver, args.username, timeout=args.timeout)
 
         print(f"Fetching beer history from {args.username}...")
@@ -315,10 +374,15 @@ def handle_selenium_fetch_beers(args):
             driver,
             args.username,
             backstop_total=effective_backstop_total,
+            existing_checkin_keys=existing_checkin_keys(existing_df),
         )
+        merged_df = merge_checkin_history(existing_df, df)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        df.to_csv(output_path, index=False)
-        print(f"Saved data to {output_path}")
+        merged_df.to_csv(output_path, index=False)
+        print(
+            f"Saved {len(merged_df):,} total check-ins to {output_path} "
+            f"({len(df):,} added during this update)."
+        )
     finally:
         if driver is not None:
             quit_driver(driver)

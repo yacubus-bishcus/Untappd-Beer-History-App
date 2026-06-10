@@ -1,0 +1,48 @@
+# Windows Installer
+
+Build the Windows desktop executable with PyInstaller, then wrap it in an Inno Setup installer.
+
+Run these commands from a Windows machine with Python 3.12 or newer, Google Chrome, and Inno Setup 6 installed:
+
+```powershell
+python --version 
+where.exe iscc
+winget install JRSoftware.InnoSetup
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-installer.ps1
+```
+
+In PowerShell, use `where.exe iscc` or `Get-Command ISCC.exe`; plain `where`
+is an alias for `Where-Object`. The build script also detects per-user Inno
+Setup installations under `%LOCALAPPDATA%\Programs\Inno Setup 6`.
+
+The script creates a local build virtual environment, installs the app dependencies, installs PyInstaller and `toga-winforms`, builds `dist\UntappdBeerHistory\UntappdBeerHistory.exe`, and then writes the installer to:
+
+```text
+dist\installer\Untappd-Beer-History-Setup-<version>.exe
+```
+
+If the `py` launcher is unavailable, pass a Python executable:
+
+```powershell
+.\packaging\windows\build-installer.ps1 -Python python -PythonVersion ""
+```
+
+The script uses the launcher's default Python and rejects versions older than 3.12. To select a specific installed version, such as Python 3.14:
+
+```powershell
+.\packaging\windows\build-installer.ps1 -PythonVersion "-3.14"
+```
+
+Delete `.windows-build-venv` before switching the build environment to a different Python version.
+
+If Inno Setup is installed somewhere unusual, pass the compiler path:
+
+```powershell
+.\packaging\windows\build-installer.ps1 -InnoCompiler "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+```
+
+The installed app stores generated CSV, config, and report files under:
+
+```text
+%LOCALAPPDATA%\Untappd Beer History
+```

@@ -11,7 +11,7 @@ import plotly.express as px
 from plotly.utils import PlotlyJSONEncoder
 
 
-PROFILE_SECTION_MARKER = "<h2>Time Window Summary</h2>"
+PROFILE_SECTION_MARKER = "<h2>Charts</h2>"
 CONTRARIAN_THRESHOLD = 0.75
 RATING_WINDOWS = [
     ("Last 7 days", "7d"),
@@ -43,7 +43,10 @@ def _empty_chart_message(message: str) -> str:
 def _normalize_date_column(df: pd.DataFrame) -> pd.DataFrame:
     dated = df.copy()
     if "Recent Date" in dated.columns:
-        dated["Recent Date"] = pd.to_datetime(dated["Recent Date"], errors="coerce")
+        dated["Recent Date"] = (
+            pd.to_datetime(dated["Recent Date"], errors="coerce", utc=True)
+            .dt.tz_convert(None)
+        )
     return dated
 
 
@@ -157,15 +160,27 @@ def _build_drinking_timeline_chart(df: pd.DataFrame) -> str:
     if timeline.empty:
         return _empty_chart_message("No valid Recent Date values are available for the drinking activity timeline.")
 
-    timeline["Month"] = timeline["Recent Date"].dt.to_period("M").dt.to_timestamp()
-    monthly = timeline.groupby("Month").size().reset_index(name="Beer Count")
-    fig = px.bar(
-        monthly,
-        x="Month",
-        y="Beer Count",
-        title="Timeline of Drinking Activity",
-        labels={"Month": "Month", "Beer Count": "Beer Count"},
+    end_date = pd.Timestamp.now().normalize()
+    start_date = end_date - pd.DateOffset(years=1)
+    timeline["Date"] = timeline["Recent Date"].dt.normalize()
+    timeline = timeline[timeline["Date"].between(start_date, end_date)]
+
+    daily_index = pd.date_range(start=start_date, end=end_date, freq="D")
+    daily = (
+        timeline.groupby("Date")
+        .size()
+        .reindex(daily_index, fill_value=0)
+        .rename_axis("Date")
+        .reset_index(name="Drink Count")
     )
+    fig = px.bar(
+        daily,
+        x="Date",
+        y="Drink Count",
+        title="Daily Drinking Activity - Past 12 Months",
+        labels={"Date": "Date", "Drink Count": "Drinks"},
+    )
+    fig.update_xaxes(range=[start_date, end_date])
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
@@ -179,37 +194,45 @@ def _build_style_diversity_chart(df: pd.DataFrame) -> tuple[str, str, str]:
     overall_text = _format_number(overall_score, digits=1) if overall_score is not None else "—"
 
     if "Recent Date" not in df.columns:
-        return overall_text, _empty_chart_message("Recent Date is missing, so year-by-year style diversity cannot be charted."), ""
+        return overall_text, _empty_chart_message("Recent Date is missing, so monthly style diversity cannot be charted."), ""
 
     dated = _normalize_date_column(df)
     dated["Beer Type"] = dated["Beer Type"].fillna("").astype(str).str.strip()
     dated = dated[dated["Recent Date"].notna() & dated["Beer Type"].ne("")]
     if dated.empty:
-        return overall_text, _empty_chart_message("Not enough dated beer-style data is available for style diversity by year."), ""
+        return overall_text, _empty_chart_message("Not enough dated beer-style data is available for monthly style diversity."), ""
 
-    dated["Year"] = dated["Recent Date"].dt.year
-    yearly_rows = []
-    for year, year_df in dated.groupby("Year"):
-        diversity = _normalized_style_diversity(year_df["Beer Type"].value_counts())
-        yearly_rows.append(
+    current_year = datetime.now().year
+    dated = dated[dated["Recent Date"].dt.year == current_year].copy()
+    if dated.empty:
+        return overall_text, _empty_chart_message(f"No dated beer-style data is available for {current_year}."), ""
+
+    dated["Month"] = dated["Recent Date"].dt.to_period("M").dt.to_timestamp()
+    monthly_rows = []
+    for month, month_df in dated.groupby("Month"):
+        diversity = _normalized_style_diversity(month_df["Beer Type"].value_counts())
+        monthly_rows.append(
             {
-                "Year": int(year),
+                "Month": month,
                 "Style Diversity Index": diversity,
-                "Beer Count": len(year_df),
-                "Unique Styles": year_df["Beer Type"].nunique(),
+                "Beer Count": len(month_df),
+                "Unique Styles": month_df["Beer Type"].nunique(),
             }
         )
-    yearly = pd.DataFrame(yearly_rows).dropna(subset=["Style Diversity Index"])
-    if yearly.empty:
-        return overall_text, _empty_chart_message("Not enough data is available for style diversity by year."), ""
+    monthly = pd.DataFrame(monthly_rows).dropna(subset=["Style Diversity Index"])
+    if monthly.empty:
+        return overall_text, _empty_chart_message(f"Not enough data is available for monthly style diversity in {current_year}."), ""
+
+    monthly = monthly.sort_values("Month")
+    monthly["Month Label"] = monthly["Month"].dt.strftime("%b")
 
     fig = px.line(
-        yearly,
-        x="Year",
+        monthly,
+        x="Month Label",
         y="Style Diversity Index",
         markers=True,
-        title="Style Diversity Index by Year",
-        labels={"Style Diversity Index": "Style Diversity Index (0-100)"},
+        title=f"Style Diversity Index by Month ({current_year})",
+        labels={"Month Label": "Month", "Style Diversity Index": "Style Diversity Index (0-100)"},
         hover_data={"Beer Count": True, "Unique Styles": True},
     )
     return overall_text, fig.to_html(full_html=False, include_plotlyjs=False), ""
@@ -379,13 +402,14 @@ def build_rating_profile_section(df: pd.DataFrame) -> str:
         _paragraph(
             "Style Diversity Index uses normalized Shannon diversity on a 0-100 scale. It rises when you drink across more beer styles and when those styles are more evenly represented."
         ),
+        "<h2>Charts</h2>",
         interactive_rating_charts,
         "<div class='chart-container'><h3>Timeline of Drinking Activity</h3>",
-        _paragraph("The drinking activity timeline counts beers by month using Recent Date, helping reveal high-activity periods, gaps, and seasonal patterns."),
+        _paragraph("The drinking activity timeline counts check-ins per day across the rolling past 12 months. Days without a drink remain visible as zero so gaps and activity streaks are continuous."),
         timeline_chart,
         "</div>",
-        "<div class='chart-container'><h3>Style Diversity Index</h3>",
-        _paragraph("The yearly style diversity chart shows whether your drinking became more style-diverse or more concentrated over time."),
+        "<div class='chart-container'><h3>Style Diversity Index by Month</h3>",
+        _paragraph("The monthly style diversity chart shows whether this year's drinking is becoming more style-diverse or more concentrated month by month."),
         diversity_chart,
         "</div>",
     ]
@@ -399,7 +423,7 @@ def inject_rating_profile(html_text: str, df: pd.DataFrame) -> str:
     if not section:
         return html_text
     if PROFILE_SECTION_MARKER in html_text:
-        return html_text.replace(PROFILE_SECTION_MARKER, section + "\n" + PROFILE_SECTION_MARKER, 1)
+        return html_text.replace(PROFILE_SECTION_MARKER, section, 1)
     return html_text.replace("<h2>Charts</h2>", section + "\n<h2>Charts</h2>", 1)
 
 
@@ -413,9 +437,6 @@ def open_statistics_report(source) -> Path:
     report_builder = UntappdBeerHistoryApp.__new__(UntappdBeerHistoryApp)
     df = report_builder.load_beer_history(source_path)
     report_path, fragment_path, _stop_marker_path = report_builder.build_statistics_report(source_path)
-
-    html_text = report_path.read_text(encoding="utf-8")
-    report_path.write_text(inject_rating_profile(html_text, df), encoding="utf-8")
 
     def build_map_fragment():
         try:

@@ -18,14 +18,12 @@ def build_beer_info_by_location(
     columns = [
         'Beer Name',
         'Producer',
-        'Producer Location',
         'Consumed Location',
         'Lat',
         'Long',
         'Beer Type',
         'My Rating',
         'Global Rating',
-        'First Date',
         'Recent Date',
     ]
     beer_info: dict[str, list[dict[str, str]]] = {}
@@ -124,7 +122,7 @@ def build_location_heatmap_html(fig, beer_info: dict) -> str:
             html += '<h3>Beers for ' + location + '</h3>';
             html += '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-size: 13px;">';
             html += '<thead><tr>';
-            const cols = ['Beer Name','Producer','Producer Location','Consumed Location','Beer Type','My Rating','Global Rating','First Date','Recent Date'];
+            const cols = ['Beer Name','Producer','Consumed Location','Beer Type','My Rating','Global Rating','Recent Date'];
             cols.forEach(col => html += '<th style="text-align:left; background:#f2f2f2;">' + col + '</th>');
             html += '</tr></thead><tbody>';
             rows.forEach(row => {
