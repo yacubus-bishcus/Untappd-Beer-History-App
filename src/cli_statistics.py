@@ -43,7 +43,10 @@ def _empty_chart_message(message: str) -> str:
 def _normalize_date_column(df: pd.DataFrame) -> pd.DataFrame:
     dated = df.copy()
     if "Recent Date" in dated.columns:
-        dated["Recent Date"] = pd.to_datetime(dated["Recent Date"], errors="coerce")
+        dated["Recent Date"] = (
+            pd.to_datetime(dated["Recent Date"], errors="coerce", utc=True)
+            .dt.tz_convert(None)
+        )
     return dated
 
 
@@ -157,15 +160,27 @@ def _build_drinking_timeline_chart(df: pd.DataFrame) -> str:
     if timeline.empty:
         return _empty_chart_message("No valid Recent Date values are available for the drinking activity timeline.")
 
-    timeline["Month"] = timeline["Recent Date"].dt.to_period("M").dt.to_timestamp()
-    monthly = timeline.groupby("Month").size().reset_index(name="Beer Count")
-    fig = px.bar(
-        monthly,
-        x="Month",
-        y="Beer Count",
-        title="Timeline of Drinking Activity",
-        labels={"Month": "Month", "Beer Count": "Beer Count"},
+    end_date = pd.Timestamp.now().normalize()
+    start_date = end_date - pd.DateOffset(years=1)
+    timeline["Date"] = timeline["Recent Date"].dt.normalize()
+    timeline = timeline[timeline["Date"].between(start_date, end_date)]
+
+    daily_index = pd.date_range(start=start_date, end=end_date, freq="D")
+    daily = (
+        timeline.groupby("Date")
+        .size()
+        .reindex(daily_index, fill_value=0)
+        .rename_axis("Date")
+        .reset_index(name="Drink Count")
     )
+    fig = px.bar(
+        daily,
+        x="Date",
+        y="Drink Count",
+        title="Daily Drinking Activity - Past 12 Months",
+        labels={"Date": "Date", "Drink Count": "Drinks"},
+    )
+    fig.update_xaxes(range=[start_date, end_date])
     return fig.to_html(full_html=False, include_plotlyjs=False)
 
 
@@ -390,7 +405,7 @@ def build_rating_profile_section(df: pd.DataFrame) -> str:
         "<h2>Charts</h2>",
         interactive_rating_charts,
         "<div class='chart-container'><h3>Timeline of Drinking Activity</h3>",
-        _paragraph("The drinking activity timeline counts beers by month using Recent Date, helping reveal high-activity periods, gaps, and seasonal patterns."),
+        _paragraph("The drinking activity timeline counts check-ins per day across the rolling past 12 months. Days without a drink remain visible as zero so gaps and activity streaks are continuous."),
         timeline_chart,
         "</div>",
         "<div class='chart-container'><h3>Style Diversity Index by Month</h3>",

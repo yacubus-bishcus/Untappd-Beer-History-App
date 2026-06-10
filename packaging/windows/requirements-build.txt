@@ -1,2 +1,2 @@
-pyinstaller>=6
+pyinstaller>=6.16
 toga-winforms

@@ -47,7 +47,7 @@ from app_runtime import (  # noqa: E402
 from run import DEFAULT_DEBUGGER_ADDRESS, DEFAULT_USER_DATA_DIR, perform_beer_fetch_workflow  # noqa: E402
 from toga.style import Pack
 from toga.style.pack import COLUMN, ROW
-from untapped_selenium import quit_driver  # noqa: E402
+from untappd_scraper import quit_driver  # noqa: E402
 from untappd_beer_history.plot_heatmap import (  # noqa: E402
     build_beer_info_by_location,
     build_location_heatmap_figure,
@@ -376,31 +376,31 @@ class UntappdBeerHistoryApp(toga.App):
         required_columns = [
             "Beer Name",
             "Producer",
-            "Producer Location",
             "Consumed Location",
             "Lat",
             "Long",
             "Beer Type",
             "My Rating",
             "Global Rating",
-            "First Date",
             "Recent Date",
         ]
         missing = [column for column in required_columns if column not in df.columns]
         if missing:
             raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
-        df["Map Location"] = df["Consumed Location"]
         df["Lat"] = pd.to_numeric(df["Lat"], errors="coerce")
         df["Long"] = pd.to_numeric(df["Long"], errors="coerce")
 
         df["My Rating"] = pd.to_numeric(df["My Rating"], errors="coerce")
         df["Global Rating"] = pd.to_numeric(df["Global Rating"], errors="coerce")
-        df["First Date"] = pd.to_datetime(df["First Date"], errors="coerce")
-        df["Recent Date"] = pd.to_datetime(df["Recent Date"], errors="coerce")
+        df["Recent Date"] = (
+            pd.to_datetime(df["Recent Date"], errors="coerce", utc=True)
+            .dt.tz_convert(None)
+        )
 
         if "Total Checkins" in df.columns:
-            df["Total Checkins"] = pd.to_numeric(df["Total Checkins"], errors="coerce").fillna(0).astype(int)
+            checkin_totals = df["Total Checkins"].astype(str).str.replace(",", "", regex=False)
+            df["Total Checkins"] = pd.to_numeric(checkin_totals, errors="coerce").fillna(0).astype(int)
         elif "total_checkins" in df.columns:
             df["Total Checkins"] = pd.to_numeric(df["total_checkins"], errors="coerce").fillna(0).astype(int)
         else:
@@ -417,22 +417,28 @@ class UntappdBeerHistoryApp(toga.App):
     ):
         now = datetime.now()
 
-        total_beers = len(df)
+        total_beers = (
+            df[["Beer Name", "Producer"]]
+            .replace("", pd.NA)
+            .dropna(subset=["Beer Name"])
+            .drop_duplicates()
+            .shape[0]
+        )
         total_producers = df["Producer"].fillna("").replace("", pd.NA).dropna().nunique()
-        total_locations = df["Map Location"].fillna("").replace("", pd.NA).dropna().nunique()
-        total_checkins = total_beers  # Each beer represents a checkin
+        total_locations = df["Consumed Location"].fillna("").replace("", pd.NA).dropna().nunique()
+        total_checkins = len(df)
 
-        first_date = df["First Date"].min()
+        earliest_date = df["Recent Date"].min()
         recent_date = df["Recent Date"].max()
         date_range = (
-            f"{first_date.date()} → {recent_date.date()}"
-            if pd.notna(first_date) and pd.notna(recent_date)
+            f"{earliest_date.date()} → {recent_date.date()}"
+            if pd.notna(earliest_date) and pd.notna(recent_date)
             else "Unknown"
         )
 
         all_time_days = 1
-        if pd.notna(first_date) and pd.notna(recent_date) and recent_date > first_date:
-            all_time_days = max(1, (recent_date - first_date).days)
+        if pd.notna(earliest_date) and pd.notna(recent_date) and recent_date > earliest_date:
+            all_time_days = max(1, (recent_date - earliest_date).days)
 
         avg_all_time = total_checkins / all_time_days if all_time_days else None
 
@@ -445,12 +451,11 @@ class UntappdBeerHistoryApp(toga.App):
         def count_by_period(label, days):
             threshold = now - timedelta(days=days)
             recent = df[df["Recent Date"] >= threshold]
-            first_seen = df[df["First Date"] >= threshold]
             return {
                 "label": label,
                 "recent_beers": len(recent),
-                "new_beers": first_seen["Beer Name"].nunique(),
-                "new_locations": first_seen["Map Location"].fillna("").replace("", pd.NA).dropna().nunique(),
+                "unique_beers": recent["Beer Name"].nunique(),
+                "unique_locations": recent["Consumed Location"].fillna("").replace("", pd.NA).dropna().nunique(),
                 "period_days": days,
             }
 
@@ -460,12 +465,12 @@ class UntappdBeerHistoryApp(toga.App):
             count_by_period("Last 365 days", 365),
         ]
 
-        ytd_new = df[df["First Date"] >= pd.Timestamp(year_start)]
+        ytd = df[df["Recent Date"] >= pd.Timestamp(year_start)]
         ytd_summary = {
             "label": "Year to Date",
-            "recent_beers": len(df[df["Recent Date"] >= pd.Timestamp(year_start)]),
-            "new_beers": ytd_new["Beer Name"].nunique(),
-            "new_locations": ytd_new["Map Location"].fillna("").replace("", pd.NA).dropna().nunique(),
+            "recent_beers": len(ytd),
+            "unique_beers": ytd["Beer Name"].nunique(),
+            "unique_locations": ytd["Consumed Location"].fillna("").replace("", pd.NA).dropna().nunique(),
             "period_days": ytd_days,
         }
 
@@ -557,7 +562,7 @@ class UntappdBeerHistoryApp(toga.App):
             html += '<h3>Beers for ' + location + '</h3>';
             html += '<table border="1" cellpadding="5" cellspacing="0" style="border-collapse: collapse; width: 100%; font-size: 13px;">';
             html += '<thead><tr>';
-            const cols = ['Beer Name','Producer','Producer Location','Consumed Location','Beer Type','My Rating','Global Rating','First Date','Recent Date'];
+            const cols = ['Beer Name','Producer','Consumed Location','Beer Type','My Rating','Global Rating','Recent Date'];
             cols.forEach(col => html += '<th style="text-align:left; background:#f2f2f2;">' + col + '</th>');
             html += '</tr></thead><tbody>';
             rows.forEach(row => {
@@ -672,7 +677,7 @@ class UntappdBeerHistoryApp(toga.App):
                 "label": label,
                 "top_drinks": top_beers(data_frame),
                 "top_producers": top_items(data_frame, ["Producer"]),
-                "top_locations": top_items(data_frame, ["Map Location"]),
+                "top_locations": top_items(data_frame, ["Consumed Location"]),
                 "top_beer_types": top_items(data_frame, ["Beer Type"]),
             }
 
@@ -687,20 +692,20 @@ class UntappdBeerHistoryApp(toga.App):
         period_data = periods + [ytd_summary]
         period_df = pd.DataFrame(period_data)
         
-        new_beers_chart = px.bar(
+        unique_beers_chart = px.bar(
             period_df, 
             x="label", 
-            y="new_beers", 
-            title="New Beers by Period",
-            labels={"label": "Period", "new_beers": "New Beers"}
+            y="unique_beers",
+            title="Unique Beers by Period",
+            labels={"label": "Period", "unique_beers": "Unique Beers"}
         ).to_html(full_html=False, include_plotlyjs=False)
         
-        new_locations_chart = px.bar(
+        unique_locations_chart = px.bar(
             period_df, 
             x="label", 
-            y="new_locations", 
-            title="New Locations by Period",
-            labels={"label": "Period", "new_locations": "New Locations"}
+            y="unique_locations",
+            title="Unique Consumed Locations by Period",
+            labels={"label": "Period", "unique_locations": "Unique Consumed Locations"}
         ).to_html(full_html=False, include_plotlyjs=False)
 
         period_metrics_json = json.dumps(period_metrics)
@@ -729,7 +734,7 @@ class UntappdBeerHistoryApp(toga.App):
 
             "<body>",
             "<h1>Untappd Beer Statistics</h1>",
-            f"<p>Source CSV: {len(df):,} beers | {total_producers} producers | {total_locations} locations</p>",
+            f"<p>Source CSV: {total_checkins:,} check-ins | {total_beers} beers | {total_producers} producers | {total_locations} consumed locations</p>",
             f"<p><strong>Date range:</strong> {date_range}</p>",
             f"<p><strong>Location summary:</strong> {location_summary_text}</p>",
         ]
@@ -744,12 +749,12 @@ class UntappdBeerHistoryApp(toga.App):
 
         html_parts.append("<h2>Time Window Summary</h2>")
         html_parts.append("<table>")
-        html_parts.append("<thead><tr><th>Window</th><th>Recent Beers</th><th>New Drinks</th><th>New Places</th><th>Days</th></tr></thead>")
+        html_parts.append("<thead><tr><th>Window</th><th>Check-ins</th><th>Unique Beers</th><th>Consumed Locations</th><th>Days</th></tr></thead>")
         html_parts.append("<tbody>")
         for summary in period_data:
             html_parts.append(
                 f"<tr><td>{summary['label']}</td><td>{summary['recent_beers']:,}</td>"
-                f"<td>{summary['new_beers']:,}</td><td>{summary['new_locations']:,}</td>"
+                f"<td>{summary['unique_beers']:,}</td><td>{summary['unique_locations']:,}</td>"
                 f"<td>{summary['period_days']:,}</td></tr>"
             )
         html_parts.append("</tbody></table>")
@@ -758,11 +763,11 @@ class UntappdBeerHistoryApp(toga.App):
             html_parts.append(f"<p><strong>YTD average checkins/day:</strong> {avg_ytd:.2f}</p>")
 
         html_parts.append("<h2>Charts</h2>")
-        html_parts.append("<div class='chart-container'><h3>New Beers by Period</h3>")
-        html_parts.append(new_beers_chart)
+        html_parts.append("<div class='chart-container'><h3>Unique Beers by Period</h3>")
+        html_parts.append(unique_beers_chart)
         html_parts.append("</div>")
-        html_parts.append("<div class='chart-container'><h3>New Locations by Period</h3>")
-        html_parts.append(new_locations_chart)
+        html_parts.append("<div class='chart-container'><h3>Unique Consumed Locations by Period</h3>")
+        html_parts.append(unique_locations_chart)
         html_parts.append("</div>")
 
         html_parts.append("<div class='chart-container'><h3>Rating-based Top Items</h3>")
@@ -793,7 +798,7 @@ class UntappdBeerHistoryApp(toga.App):
         html_parts.append("function renderPeriodStats(label) {")
         html_parts.append("  const data = PERIOD_METRICS[label];")
         html_parts.append("  if (!data) { periodStats.innerHTML = '<p>Period summary not available.</p>'; return; }")
-        html_parts.append("  periodStats.innerHTML = `<div class='metric-grid'><div class='metric-card'><strong>Window</strong><div>${data.label}</div></div><div class='metric-card'><strong>Top Drinks</strong>${renderMetricsTable(data.top_drinks)}</div><div class='metric-card'><strong>Top Producers</strong>${renderMetricsTable(data.top_producers)}</div><div class='metric-card'><strong>Top Locations</strong>${renderMetricsTable(data.top_locations)}</div><div class='metric-card'><strong>Top Beer Types</strong>${renderMetricsTable(data.top_beer_types)}</div></div>`;")
+        html_parts.append("  periodStats.innerHTML = `<div class='metric-grid'><div class='metric-card'><strong>Top Drinks</strong>${renderMetricsTable(data.top_drinks)}</div><div class='metric-card'><strong>Top Producers</strong>${renderMetricsTable(data.top_producers)}</div><div class='metric-card'><strong>Top Consumed Locations</strong>${renderMetricsTable(data.top_locations)}</div><div class='metric-card'><strong>Top Beer Types</strong>${renderMetricsTable(data.top_beer_types)}</div></div>`;")
         html_parts.append("}")
         html_parts.append("periodSelect.addEventListener('change', function() { renderPeriodStats(this.value); });")
         html_parts.append("renderPeriodStats(periodSelect.value);")
@@ -811,25 +816,25 @@ class UntappdBeerHistoryApp(toga.App):
     def _estimate_map_build_seconds(self, df: pd.DataFrame) -> int:
         map_df = self._map_dataframe(df)
         location_count = (
-            map_df["Map Location"].fillna("").replace("", pd.NA).dropna().nunique()
-            if "Map Location" in map_df.columns
+            map_df["Consumed Location"].fillna("").replace("", pd.NA).dropna().nunique()
+            if "Consumed Location" in map_df.columns
             else 0
         )
         return max(5, min(120, int(round(4 + location_count * 0.35))))
 
     def build_map_fragment(self, df: pd.DataFrame, fragment_path: Path, stop_requested=None):
         map_df = self._map_dataframe(df)
-        beer_info = build_beer_info_by_location(map_df, location_column="Map Location")
+        beer_info = build_beer_info_by_location(map_df, location_column="Consumed Location")
         unique_location_count = (
-            map_df["Map Location"].fillna("").replace("", pd.NA).dropna().nunique()
-            if "Map Location" in map_df.columns
+            map_df["Consumed Location"].fillna("").replace("", pd.NA).dropna().nunique()
+            if "Consumed Location" in map_df.columns
             else 0
         )
         try:
             fig = build_location_heatmap_figure(
                 map_df,
                 stop_requested=stop_requested,
-                location_column="Map Location",
+                location_column="Consumed Location",
             )
         except TaskCancelled:
             return
@@ -855,9 +860,9 @@ class UntappdBeerHistoryApp(toga.App):
         )
 
     def _map_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        if "Map Location" not in df.columns:
+        if "Consumed Location" not in df.columns:
             return df
-        locations = df["Map Location"].fillna("").astype(str).str.strip()
+        locations = df["Consumed Location"].fillna("").astype(str).str.strip()
         return df[
             locations.ne("")
             & ~locations.str.casefold().eq("untappd at home")
@@ -904,20 +909,32 @@ class UntappdBeerHistoryApp(toga.App):
         safe_name = safe_name or "friend"
         return base_path.parent / f"{safe_name}_beers.csv"
 
-    def _monthly_checkin_rows(self, df: pd.DataFrame, label: str, year: int) -> pd.DataFrame:
+    def _monthly_checkin_rows(
+        self,
+        df: pd.DataFrame,
+        label: str,
+        end_date=None,
+    ) -> pd.DataFrame:
+        end_date = pd.Timestamp(datetime.now() if end_date is None else end_date).normalize()
+        start_date = end_date - pd.Timedelta(days=364)
         dated = df.copy()
         dated = dated[dated["Recent Date"].notna()].copy()
-        dated = dated[dated["Recent Date"].dt.year == year]
-        month_index = pd.date_range(f"{year}-01-01", f"{year}-12-01", freq="MS")
+        dated["Activity Date"] = dated["Recent Date"].dt.normalize()
+        dated = dated[dated["Activity Date"].between(start_date, end_date)]
+        month_index = pd.date_range(
+            start=start_date.to_period("M").to_timestamp(),
+            end=end_date.to_period("M").to_timestamp(),
+            freq="MS",
+        )
         if dated.empty:
             counts = pd.Series(0, index=month_index)
         else:
-            counts = dated.groupby(dated["Recent Date"].dt.to_period("M").dt.to_timestamp()).size()
+            counts = dated.groupby(dated["Activity Date"].dt.to_period("M").dt.to_timestamp()).size()
             counts = counts.reindex(month_index, fill_value=0)
         return pd.DataFrame(
             {
                 "Month": month_index,
-                "Month Label": [month.strftime("%b") for month in month_index],
+                "Month Label": [month.strftime("%b %Y") for month in month_index],
                 "Recorded Check-ins": counts.astype(int).values,
                 "User": label,
             }
@@ -978,7 +995,8 @@ class UntappdBeerHistoryApp(toga.App):
         data_dir = Path(data_dir_value).expanduser() if data_dir_value else Path(DEFAULT_OUTPUT).expanduser().parent
         data_dir.mkdir(parents=True, exist_ok=True)
         report_path = data_dir / "beer_friend_comparison.html"
-        year = datetime.now().year
+        comparison_end = pd.Timestamp.now().normalize()
+        comparison_start = comparison_end - pd.Timedelta(days=364)
 
         labels = [username, friend_username]
         total_df = pd.DataFrame(
@@ -989,8 +1007,8 @@ class UntappdBeerHistoryApp(toga.App):
         )
         monthly = pd.concat(
             [
-                self._monthly_checkin_rows(user_df, username, year),
-                self._monthly_checkin_rows(friend_df, friend_username, year),
+                self._monthly_checkin_rows(user_df, username, comparison_end),
+                self._monthly_checkin_rows(friend_df, friend_username, comparison_end),
             ],
             ignore_index=True,
         )
@@ -1021,7 +1039,10 @@ class UntappdBeerHistoryApp(toga.App):
             y="Recorded Check-ins",
             color="User",
             markers=True,
-            title=f"Monthly Recorded Check-ins ({year})",
+            title=(
+                "Monthly Recorded Check-ins - Past 365 Days "
+                f"({comparison_start.date()} to {comparison_end.date()})"
+            ),
             labels={"Month Label": "Month"},
         ).to_html(full_html=False, include_plotlyjs=False)
         rating_profile_ratings_chart = px.bar(
@@ -1148,13 +1169,13 @@ class UntappdBeerHistoryApp(toga.App):
     def show_statistics(self, widget=None):
         try:
             options = self._collect_workflow_options()
+            source_path = Path(str(options["output"] or str(DEFAULT_OUTPUT)).strip()).expanduser()
+            df = self.load_beer_history(source_path)
+            report_path, fragment_path, stop_marker_path = self.build_statistics_report(options["output"])
         except Exception as exc:
             self._show_error("Statistics Failed", str(exc))
             return
 
-        source_path = Path(str(options["output"] or str(DEFAULT_OUTPUT)).strip()).expanduser()
-        df = self.load_beer_history(source_path)
-        report_path, fragment_path, stop_marker_path = self.build_statistics_report(options["output"])
         report_url = report_path.as_uri()
 
         stop_event = threading.Event()
@@ -1265,6 +1286,7 @@ class UntappdBeerHistoryApp(toga.App):
                 try:
                     quit_driver(driver)
                 except Exception:
+                    print("Failed to quit driver during stop process.")
                     pass
 
         def worker():

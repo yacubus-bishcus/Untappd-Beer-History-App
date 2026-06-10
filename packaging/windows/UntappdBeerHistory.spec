@@ -36,7 +36,7 @@ datas = [
     (str(ROOT / "README.md"), "."),
 ]
 
-for package in ("certifi", "plotly", "toga", "toga_winforms", "webdriver_manager"):
+for package in ("certifi", "plotly", "toga", "toga_winforms", "tqdm", "webdriver_manager"):
     datas += safe_collect_data_files(package)
 
 for distribution in (
@@ -49,11 +49,11 @@ for distribution in (
     "pandas",
     "plotly",
     "pythonnet",
-    "requests",
     "selenium",
     "toga",
     "toga-core",
     "toga-winforms",
+    "tqdm",
     "travertino",
     "urllib3",
     "webdriver-manager",
@@ -67,6 +67,7 @@ for package in (
     "pythonnet",
     "toga",
     "toga_winforms",
+    "tqdm",
     "travertino",
     "selenium",
     "webdriver_manager",

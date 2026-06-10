@@ -1,6 +1,6 @@
 param(
     [string]$Python = "py",
-    [string]$PythonVersion = "-3.12",
+    [string]$PythonVersion = "",
     [string]$InnoCompiler = ""
 )
 
@@ -50,8 +50,30 @@ try {
         $PythonArgs += $PythonVersion
     }
 
+    $PythonVersionInfo = (& $Python @PythonArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not run the requested Python interpreter."
+    }
+    $PythonVersionParts = $PythonVersionInfo.Split(".")
+    if (
+        [int]$PythonVersionParts[0] -lt 3 -or
+        ([int]$PythonVersionParts[0] -eq 3 -and [int]$PythonVersionParts[1] -lt 12)
+    ) {
+        throw "Windows packaging requires Python 3.12 or newer; found Python $PythonVersionInfo."
+    }
+    Write-Host "Using Python $PythonVersionInfo for the Windows build."
+
     if (-not (Test-Path $VenvPython)) {
         & $Python @PythonArgs -m venv $VenvDir
+    }
+
+    $VenvVersionInfo = (& $VenvPython -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')").Trim()
+    $VenvVersionParts = $VenvVersionInfo.Split(".")
+    if (
+        [int]$VenvVersionParts[0] -lt 3 -or
+        ([int]$VenvVersionParts[0] -eq 3 -and [int]$VenvVersionParts[1] -lt 12)
+    ) {
+        throw "The existing build environment uses Python $VenvVersionInfo. Delete '$VenvDir' and rerun with Python 3.12 or newer."
     }
 
     & $VenvPython -m pip install --upgrade pip

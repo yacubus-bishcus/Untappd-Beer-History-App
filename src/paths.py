@@ -12,11 +12,10 @@ BUNDLED_PYTHON_PATH = (
 )
 DATA_DIR = Path(os.environ.get("UNTAPPD_DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()
 DEPLOY_DIR = PROJECT_ROOT / "deploy"
-DOCUMENTATION_DIR = PROJECT_ROOT / "documentation"
-
 DEFAULT_OUTPUT_PATH = DATA_DIR / "my_beers.csv"
 APP_CONFIG_PATH = DATA_DIR / "app_config.json"
-PRODUCER_LOCATION_CACHE_PATH = DATA_DIR / "producer_location_cache.json"
+BEER_DETAILS_CACHE_PATH = DATA_DIR / "beer_details_cache.json"
+VENUE_COORDINATES_CACHE_PATH = DATA_DIR / "venue_coordinates_cache.json"
 
 
 def ensure_data_dir() -> Path:

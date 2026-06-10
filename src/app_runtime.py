@@ -40,7 +40,10 @@ class ProcessManager:
         class QueueWriter(io.TextIOBase):
             def write(self, text):
                 if text:
-                    manager.events.put(("log", text))
+                    if text.startswith("\r") and "\n" not in text:
+                        manager.events.put(("status", text.strip()))
+                    else:
+                        manager.events.put(("log", text))
                 return len(text)
 
             def flush(self):
@@ -63,8 +66,9 @@ class ProcessManager:
                 self.events.put(("info", ("Task Stopped", "The running task has stopped.")))
                 self.events.put(("status", "Ready"))
                 self.events.put(("busy", False))
-            except Exception:
+            except Exception as exc:
                 self.events.put(("log", f"\n{traceback.format_exc()}\n"))
+                self.events.put(("info", ("Task Failed", str(exc))))
                 self.events.put(("status", "Ready"))
                 self.events.put(("busy", False))
             finally:

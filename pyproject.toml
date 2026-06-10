@@ -29,15 +29,15 @@ sources = [
   "src/app_config.py",
   "src/paths.py",
   "src/run.py",
-  "src/untapped_selenium.py",
+  "src/untappd_scraper.py",
 ]
 requires = [
   "urllib3<2",
   "pandas",
   "plotly",
-  "requests",
   "beautifulsoup4",
   "selenium",
+  "tqdm",
   "webdriver-manager",
   "toga",
 ]
