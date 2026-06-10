@@ -159,18 +159,18 @@ Then open `http://pi5server:8088/beer_statistics.html` on your LAN after generat
 
 ## CSV Columns
 
-- `Beer Name`
-- `Producer`
+- `Beer Name` from Users/username page
+- `Producer` from Users/username page
 - `Producer Location`
-- `Consumed Location`
-- `Lat`
-- `Long`
+- `Consumed Location`from Users/username page
+- `Lat`from consumed location link
+- `Long` from consumed location link
 - `Beer Type`
-- `My Rating`
-- `Global Rating`
+- `My Rating`from consumed location link
+- `Global Rating`from beer link
 - `First Date`
-- `Recent Date`
-- `Total Checkins`
+- `Recent Date` from Users/username page
+- `Total Checkins`from beer link
 
 `Producer Location` comes from the producer page. `Consumed Location`, `Lat`, and `Long` come from the Untappd venue page linked from each check-in. The heatmap uses consumed-location coordinates and excludes `Untappd at Home` only from the map.
 

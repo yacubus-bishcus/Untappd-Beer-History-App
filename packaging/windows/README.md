@@ -5,8 +5,10 @@ Build the Windows desktop executable with PyInstaller, then wrap it in an Inno S
 Run these commands from a Windows machine with Python 3.12, Google Chrome, and Inno Setup 6 installed:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\packaging\windows\build-installer.ps1
+python --version 
+where iscc 
+winget install JRSoftware.InnoSetup
+powershell -ExecutionPolicy Bypass -File .\packaging\windows\build-installer.ps1
 ```
 
 The script creates a local build virtual environment, installs the app dependencies, installs PyInstaller and `toga-winforms`, builds `dist\UntappdBeerHistory\UntappdBeerHistory.exe`, and then writes the installer to:

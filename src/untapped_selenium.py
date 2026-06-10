@@ -261,6 +261,7 @@ def launch_chrome_with_debugger(
     debugger_address: str = "127.0.0.1:9222",
     user_data_dir: Optional[str] = None,
     start_url: Optional[str] = None,
+    headless: bool = False,
 ):
     """
     Launch a standalone Chrome window with remote debugging enabled.
@@ -282,6 +283,14 @@ def launch_chrome_with_debugger(
         "--new-window",
         start_url,
     ]
+    if headless:
+        chrome_args.extend(
+            [
+                "--headless=new",
+                "--disable-gpu",
+                "--window-size=1920,1080",
+            ]
+        )
 
     if sys.platform == "darwin" and shutil.which("open"):
         command = ["open", "-na", "Google Chrome", "--args", *chrome_args]
