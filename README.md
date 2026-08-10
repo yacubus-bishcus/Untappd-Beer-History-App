@@ -2,6 +2,19 @@
 
 Export your Untappd beer history with Selenium, save it to CSV, and review local statistics in a native desktop app built with Toga.
 
+The project also includes a private, responsive web app backed by Supabase and deployed on Vercel. Use the desktop app to collect your Untappd history, then sync `data/my_beers.csv` into the web archive from any browser.
+
+## Web App
+
+Production: [untappd-beer-history.vercel.app](https://untappd-beer-history.vercel.app)
+
+1. Create an account with your email and password.
+2. Confirm the email if Supabase asks you to.
+3. Open the dashboard and select `Import CSV`.
+4. Upload `data/my_beers.csv` from the desktop app.
+
+Repeated imports are safe. Rows are matched by beer, brewery, and check-in date, then updated in place. Each account can only read or change its own rows; Supabase Row Level Security enforces that boundary in Postgres.
+
 ## Best Download Option
 
 If you just want to use the app on macOS, download the latest DMG from GitHub Releases.
@@ -16,14 +29,18 @@ Untappd-Beer-History-App/
 ├── data/
 ├── packaging/
 ├── resources/
+├── supabase/
 ├── src/
+├── web/
 └── pyproject.toml
 ```
 
 - `data/`: generated CSV, local config, and generated statistics HTML
 - `packaging/`: platform-specific build files
 - `resources/`: Briefcase app icon assets
+- `supabase/`: Postgres migrations and local Supabase configuration
 - `src/`: Python source files and `requirements.txt`
+- `web/`: Next.js app for Vercel, including authentication, CSV import, and analytics
 - `pyproject.toml`: Briefcase packaging configuration
 
 ## Quick Start From Source
